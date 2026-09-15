@@ -103,7 +103,7 @@ pi-chamber/
 ├── package.json               # workspace 根脚本（dev/dev:server/dev:web/test/smoke/agent-smoke/prompt-smoke/subagent-smoke/web-smoke/termd/term-smoke/termd-smoke，见 2.4）
 ├── pnpm-workspace.yaml        # packages: ["packages/*"]
 ├── .npmrc                     # node-linker=hoisted（隔离式 node_modules 会破坏扩展 require 约定，勿改）
-├── AGENTS.md  README.md  LICENSE
+├── AGENTS.md  README.md  README.CH.md  LICENSE
 ├── pnpm-lock.yaml
 ├── tts文档/                    # 语音（STT/TTS）对接文档
 ├── .pi/                       # 本仓的 agent 定义（不要动）
