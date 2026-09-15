@@ -3,6 +3,7 @@
 // 数据源两条帧（都在 PROTOCOL.new.md 的「共用帧」）：
 //   agent.sessions.sync  { agents, selectedCwd, sessions }   连接 / 换目录 → 整组替换
 //   agent.sessions.patch { agents?, rows? }                  其余所有名册变化 → 字段级合并
+//   agent.plugin.state   { sessionId, state }                插件状态（如 todos）→ 按场存（state:null = 删）
 //
 // 三条写规则（协议里就叫这名）：
 //   ① 本端发上行帧（open/close/delete）先置 "pending"（写行）；此后一律由帧写真值。
@@ -22,6 +23,11 @@ export const useSessionsStore = create(() => ({
   agents: [], // { cwd, basename, sessionCount }
   selectedCwd: null, // Agent 下拉当前值（连接时由服务端给，之后是本端选择）
   sessions: [], // { id, cwd, name, updateTime, messageCount, status }
+  // 插件状态（agent.plugin.state）：{ [sessionId]: { todos: [{description, status}] } }
+  //   · 按 sessionId 整份替换（帧里就是该场的全量）；state:null → 删条目（这场没了）
+  //   · 放名册而不是 chat：状态是**按场**的（后台 subagent 的进度也要能显），且换会话不该丢
+  //   · 不随 sync 剪枝（sync 只含 selectedCwd 的行，剪了会误伤别的目录/焦点的状态）；靠 close/delete 的 null 清
+  pluginState: {},
   creating: false, // 「新建 Session」按钮在途（此刻还没有 id，没行可置 pending）
   error: null, // 本地校验 / 服务端 notice 的错误文案
 }));
@@ -128,6 +134,21 @@ bus.on("agent.sessions.patch", (p) => {
   if (p.agents?.length) next.agents = mergeAgents(st.agents, p.agents);
   if (p.rows?.length) next.sessions = mergeRows(st.sessions, st.selectedCwd, p.rows);
   if (Object.keys(next).length) useSessionsStore.setState(next);
+});
+
+// 插件状态帧：按 sessionId 整份替换；null = 这场没了 → 删条目
+bus.on("agent.plugin.state", (p) => {
+  const id = p?.sessionId;
+  if (!id) return;
+  const cur = useSessionsStore.getState().pluginState;
+  if (p.state == null) {
+    if (!(id in cur)) return;
+    const next = { ...cur };
+    delete next[id];
+    useSessionsStore.setState({ pluginState: next });
+    return;
+  }
+  useSessionsStore.setState({ pluginState: { ...cur, [id]: p.state } });
 });
 
 // 对话整组帧（带 activeId 的那种）到达 = 服务端已受理上一个写动作 → 新建按钮收工

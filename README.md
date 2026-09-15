@@ -28,6 +28,7 @@ pi-chamber 是 pi 编码 agent（`@earendil-works/pi-coding-agent`）的**远程
 |------|------|
 | **Session 管理** | 列出机器上所有 agent 及各自的历次 Session；新建 / 打开 / 收工 / 销毁；多份出勤并行，随时切换焦点跟着看 |
 | **流式对话** | text / thinking / toolCall 分块实时渲染；忙时可插队下一条、可随时停止；模型失败自动重试 |
+| **进度可见** | agent 边干边把待办清单写下来（`todos` 插件），输入框上方实时显示进度条与当前项；干完自动折叠退场 |
 | **远程文件操作** | 在 agent 的工作目录里导航、浏览，新建 / 改名 / 删除 / 移动文件与目录 |
 | **远程编辑** | 页面上直接编辑（CodeMirror 语法高亮、多标签），保存即写回 agent 那台机器；文件被外部改动时页面实时跟随 |
 | **语音** | 按住说话下指令（STT）；点喇叭朗读任意一条回答（TTS），可开「自动朗读」边生成边跟读 |
@@ -115,7 +116,13 @@ termd 只绑 `127.0.0.1:3002`，自带一套 40 行线协议（**不走 bus**）
 
 ### 3. 插件机制 —— 能力由目录决定，开关能热更
 
-chamber 内置的能力（目前是 **subagent**：让 agent 把一件自足的任务派给一份新的独立 Session）不是写死的，而是**按 cwd 配置启用** —— 这跟「一个 cwd 目录 = 一个 Agent Space」是同一条原则：**agent 的能力，应该由目录自己说了算**。
+chamber 内置的能力不是写死的，而是**按 cwd 配置启用** —— 这跟「一个 cwd 目录 = 一个 Agent Space」是同一条原则：**agent 的能力，应该由目录自己说了算**。
+
+目前两个：
+
+- **`subagent`**：让 agent 把一件自足的任务派给一份**新的独立 Session** —— 于是白捡：名册里看得见、能点开看实时流式、能 abort、能翻页、有独立档案、成本单算；
+- **`todos`**：给 agent 一份**公开的待办清单**（前端显示在输入框上方，带进度条与「正在做」）。
+  > ★ 它的定位是「**模型 → 用户的进度汇报窗口**」，不是「模型的自我管理工具」：想影响模型行为就写进 tool description（系统提示词层），**绝不做定时注入提醒这类催促** —— 代价是假更新，而清单一旦不真，这个面板就废了。
 
 配置写在 `<cwd>/.pi/pi-chamber.json`：
 
@@ -126,7 +133,8 @@ chamber 内置的能力（目前是 **subagent**：让 agent 把一件自足的�
     "model": "ds/deepseek-flash",
     "maxConcurrent": 4,
     "timeoutMs": 360000
-  }
+  },
+  "todos": { "enabled": true }
 }
 ```
 
@@ -145,6 +153,8 @@ chamber 内置的能力（目前是 **subagent**：让 agent 把一件自足的�
 export const key = "xxx";          // 配置键名（= pi-chamber.json 里那一段的名字）
 export const toolNames = ["xxx"];  // 本插件占用的工具名
 export function create(ctx) { … }  // → ToolDefinition | null（null = 本次不注入，如深度到顶）
+// 可选（有状态的插件才要）：从一条 toolResult 里取出本插件状态，供恢复现场用
+export function stateOf(message) { … }
 ```
 
 > 完整的契约、`ctx` 字段与所有取舍，见 [`AGENTS.md`](./AGENTS.md) 第 4 章。
@@ -164,6 +174,7 @@ WS `/ws?token=JWT`（单连接独占，新连接踢旧，心跳 60s）。主要�
 - **对话**：`agent.chat.sync`（字段级替换）/ `agent.chat.message` / `agent.chat.delta` / `agent.chat.notice`
 - **生命周期**：`agent.session.{open,close,create,delete,prompt,abort}`
 - **翻页 / 取全文**：`agent.chat.more_messages` · `agent.chat.toolResult`（request）
+- **插件状态**：`agent.plugin.state`（如 todos 清单；工具写完 / 连接 / 打开时推，`state:null` = 这场没了）
 - **导航 / 文件**：`nav.state` · `nav.update` · `nav.open` · `fs.{list,desktop,search,create,rename,delete,move}`
 - **编辑器**：`nav.open_file` · `editor.{update,files,file_changed,close_file}`
 - **语音**：`stt.{audio,end,partial,final,error}` · `tts.{speak,audio,finish,stop,end,break}`
@@ -184,6 +195,7 @@ pnpm smoke          # 活体服务全链路体检
 pnpm agent-smoke    # Agent 域名册 / 生命周期冒烟
 pnpm prompt-smoke   # prompt 全流程（真实模型往返 + 帧语义断言）
 pnpm subagent-smoke # subagent 域（真调模型：默认关 / 全链路 / /reload 热更）
+pnpm todos-smoke    # todos 域（真调模型：默认关 / 状态帧 / 档案恢复 / 重连补推）
 pnpm web-smoke      # 前端 store 冒烟（Node 里跑真前端代码消费活体帧）
 pnpm termd-smoke    # 终端域冒烟（直连 termd）
 pnpm term-smoke     # 终端域冒烟（走 chamber 全链路）

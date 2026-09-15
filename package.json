@@ -17,6 +17,7 @@
     "agent-smoke": "pnpm --dir packages/server agent-smoke",
     "prompt-smoke": "pnpm --dir packages/server prompt-smoke",
     "subagent-smoke": "pnpm --dir packages/server subagent-smoke",
+    "todos-smoke": "pnpm --dir packages/server todos-smoke",
     "web-smoke": "pnpm --dir packages/server web-smoke",
     "termd": "node packages/termd/scripts/termd.mjs",
     "term-smoke": "pnpm --dir packages/server term-smoke",

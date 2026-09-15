@@ -3,6 +3,7 @@ import { Alert, Empty, Flex, Tag } from "antd";
 import { useChatStore, chatActions } from "../../stores/index.js";
 import MessageList from "./MessageList.jsx";
 import InputBox from "./InputBox.jsx";
+import TodosPanel from "./TodosPanel.jsx";
 import ConnStatus from "../../components/ConnStatus.jsx";
 import { T } from "../../theme/tokens.js";
 
@@ -146,6 +147,8 @@ export default function ChatPage() {
                 onClose={clearNotice}
               />
             )}
+            {/* 待办清单（todos 插件）：无清单时整块不渲染 */}
+            <TodosPanel />
             <InputBox />
           </div>
         </Flex>

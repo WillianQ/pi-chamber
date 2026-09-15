@@ -38,7 +38,7 @@ pi-chamber 是一个**远程、跨平台的 agent 监控操作界面**：chamber
 | **Bus** | 共享总线协议机（`@pi-chamber/bus`）：本地双通道 + 网络 transport。进程内单例，WS 只是插在 transport 槽上的网线。 |
 | **termd（终端守护）** | chamber 的**子进程**（不是外部服务）：独立进程，**唯一持有 node-pty 的东西**（`packages/termd`）。chamber 只是它的客户端（私线 = `127.0.0.1:3002` + token，见 2.5），**协议不走 bus** —— 它自带一套 40 行线协议。这么分是为了让终端活过 chamber 重启：PTY 子进程挂在谁下面，谁重启就带走谁。 |
 | **subagent** | agent 通过 `subagent` 工具**派出去的一份新出勤**（不是子进程）：它就是一个普通 Session（独立 AgentSession + 独立 jsonl + 独立上下文窗口），只是档案头带 `parentSession` → 名册行 `isSubAgent:true` + `parentId`。好处 = 白捡整套 Session 能力（实时流式 / 可 open / 可 abort / 可翻页 / 成本单算）。递归靠 `depth` 在**创建期**掉（子场拿不到本工具）。**默认关闭**，要在 `<cwd>/.pi/pi-chamber.json` 里显式开（见第 4 章）。 |
-| **插件（plugin）** | `agent-service/plugins/` 下的一个能力单元：往 AgentSession 注入一个工具，**能不能用由 `<cwd>/.pi/pi-chamber.json` 决定**。目前只有 subagent 一个；抽这层是为了以后同类能力照同一套写。 |
+| **插件（plugin）** | `agent-service/plugins/` 下的一个能力单元：往 AgentSession 注入一个工具，**能不能用由 `<cwd>/.pi/pi-chamber.json` 决定**。目前有 subagent（派单）与 todos（公开待办清单）两个；抽这层是为了同类能力照同一套写。 |
 
 ### 2.2 对外用词约定
 
@@ -65,6 +65,7 @@ pnpm dev:server / dev:web         # 只起一端（日常调后端/前端时各�
 pnpm agent-smoke                  # Agent 域冒烟：名册 sync/patch + open/close/create/delete + 翻页 + 失败路径
 pnpm prompt-smoke                 # prompt 全流程：真实模型往返 + 帧语义断言（真写盘，用完即删幽灵）
 pnpm subagent-smoke               # subagent 域：让模型真调一次 subagent 工具，验「子 agent = 名册里的一行真 Session」
+pnpm todos-smoke               # todos 域：模型真调一次 todos 工具，验「清单 = 工具调用 + agent.plugin.state 帧 + 档案恢复」
 pnpm web-smoke                    # 前端 store 冒烟：Node 里跑真前端代码消费活体帧（sessions/chat 两 store）
 pnpm termd start|stop|status|restart  # 终端守护进程（termd）；chamber 启动时也会自动探测并拉起
 pnpm termd-smoke                  # 终端域冒烟（直连 termd）：起/接管/回放/IO/resize/断开不杀/重连回放/名册
@@ -137,13 +138,14 @@ pi-chamber/
     │   │   │   ├── index.js            #   名册表 + 焦点 activeId + 名册目录 cwd + 事件桥 + 生命周期 + prompt/abort + 翻页/补全 + 呆滞清理
     │   │   │   ├── commands.js         #   / 命令域（孤岛：不吃表不读焦点不摸 bus）
     │   │   │   ├── plugins/            #   ★ 插件域：按 <cwd>/.pi/pi-chamber.json 启用的能力
-    │   │   │   │   ├── index.js        #     读配置 + 判 enabled + 工具名归属 + 激活收敛（加插件就改这里）
-    │   │   │   │   └── subagent.js     #     subagent 插件（孤岛：只收注入的建场/收工原语）
+    │   │   │   │   ├── index.js        #     读配置 + 判 enabled + 工具名归属 + 激活收敛 + 状态恢复（加插件就改这里）
+    │   │   │   │   ├── subagent.js     #     subagent 插件（孤岛：只收注入的建场/收工原语）
+    │   │   │   │   └── todos.js     #     todos 插件（孤岛：只收注入的 publishState）
     │   │   │   └── messages.js         #   消息投影纯函数（首屏/实时/翻页三个消费者共用一套口径）
     │   │   └── nav-service.js  editor-service.js  stt-service.js  tts-service.js  term-service.js  # 其余五个 Service
     │   │                              # ↑ term-service.js 只做帧桥接（~190 行）：PTY 归 packages/termd，chamber 不碰 node-pty
     │   ├── data/              #   nav-state.json（导航位置现场，运行期产物）
-    │   ├── scripts/           #   smoke.js / agent-smoke.mjs / prompt-smoke.mjs / subagent-smoke.mjs / web-smoke.mjs / term-smoke.mjs / tts-smoke.mjs
+    │   ├── scripts/           #   smoke.js / agent-smoke.mjs / prompt-smoke.mjs / subagent-smoke.mjs / todos-smoke.mjs / web-smoke.mjs / term-smoke.mjs / tts-smoke.mjs
     │   └── test/              #   bus.test.js + 真服务 e2e：bus-e2e(3998) editor-e2e(3997) fsops-e2e(3996)
     └── web/                   # @pi-chamber/web：React 19 + antd 6 + zustand + Vite
         ├── package.json
@@ -159,14 +161,14 @@ pi-chamber/
             ├── pages/              # 页面（一页一目录）
             │   ├── login.jsx
             │   ├── sessions/       #   Session 管理面板
-            │   ├── chat/           #   消息流 index / MessageList / MessageBlock / InputBox / Palette（输入框补全面板：/ 命令 + @ 文件引用，规矩在 command-match.js / file-match.js）；朗读 UI：MessageList 右下浮钮+自动朗读开关 / MessageBlock 喇叭；按住说话在 InputBox
+            │   ├── chat/           #   消息流 index / MessageList / MessageBlock / InputBox / Palette（输入框补全面板：/ 命令 + @ 文件引用，规矩在 command-match.js / file-match.js）/ TodosPanel（待办清单，输入框上方）；朗读 UI：MessageList 右下浮钮+自动朗读开关 / MessageBlock 喇叭；按住说话在 InputBox
             │   ├── nav/            #   目录导航活动页（NavPage+行组件+弹窗+底部文件/文件夹搜索框全单文件）
             │   ├── editor/         #   编辑器活动页 index + CodeEditor（CodeMirror，懒加载）
             │   ├── terminal/       #   终端活动页 index（标题条/画布/TabBar）+ TermView（xterm 实例，懒加载）
             │   └── settings/       #   设置活动页（连接/账号/朗读音色·语速）
             ├── stores/             # 一域一 store（订阅在文件尾 bus.on 自挂；Actions 是纯函数对象，不进 hook）
             │   ├── index.js        #   聚合出口
-            │   └── auth-store / sessions-store（名册：sync/patch 合并 + 五个上行动作）
+            │   └── auth-store / sessions-store（名册：sync/patch 合并 + 五个上行动作 + **pluginState 插件状态表**）
             │       / chat-store（对话：chat.sync 字段级替换 + message/delta 草稿机 + notice）
             │       / nav-store / editor-store / ui-store / stt-store / tts-store（朗读调度，见 tts-store.js 头注）
             │       / term-store（终端控制面：名册 + owners + detach；★ 输出不进 store，直通 xterm 实例，见其头注）
@@ -268,6 +270,7 @@ ws.onclose   = () => bus.detachTransport("ws closed");
 | `agent.session.abort` | emit(w→s) | `{sessionId}` | — | 停止当前轮：clearQueue → abort 到 idle；幂等 |
 | `agent.chat.more_messages` | request | `{sessionId, before}` | `{messages, before}` | 向前翻页（一页 20 条）：源 = 档案 `getEntries()`，从 `before` 沿 `parentId` 回溯 |
 | `agent.chat.toolResult` | request | `{sessionId, toolCallId}` | `{text}` | 取被裁的 toolResult 全文（档案里按 toolCallId 找） |
+| `agent.plugin.state` | emit(s→w) | `{sessionId, state}` | — | 插件状态（如 todos）：`state = {插件key: 状态}`（整场全量，如 `{todos:[{description,status}]}`）；`state:null` = 这场没了（前端删条目）。**广播不分焦点**（后台场次的进度也要动）。触发：工具每次写完 / $conn.open 补推 / open 恢复 / close·delete 清 |
 | `nav.state` | emit(s→w) | `{current, cwd, items}` | — | 导航现场唯一真相流：$conn.open / nav.open 生效 / focused 联动 / **fs 写侧成功后补推**；items 现拉现给 |
 | `nav.update` | emit(s→w) | `{add\|change:{type, name, abs_path}}` 或 `{remove:{abs_path}}` | — | watcher 增量：fs.watch 盯 current（depth 0），一条事件推一条 |
 | `nav.open` | request | `{current}`（空 = 此电脑层） | `{ok}` | current 唯一手动改口；非目录/不存在抛错；状态由后续 nav.state 送达 |
@@ -337,6 +340,11 @@ ts, text          // ISO / 摊平文本（纯文本渲染 + 朗读用）
 // info（chat.sync.info）
 type Info = { input, output, cacheRead, cacheWrite, cost,        // = getSessionStats()
               contextTokens, contextPercent, contextWindow }    // = getContextUsage()；contextTokens 可为 null
+
+// 插件状态（agent.plugin.state.state）—— 键 = 插件 key，值 = 该插件自定义（帧里永远是整场全量）
+type PluginState = { [pluginKey: string]: unknown }
+//   目前只有 todos：{ todos: [{ description, status: "waiting"|"doing"|"done" }] }
+//   前端存 sessions-store.pluginState: { [sessionId]: PluginState }；state:null = 删该 sessionId 条目
 ```
 
 **表后注**：
@@ -355,11 +363,15 @@ type Info = { input, output, cacheRead, cacheWrite, cost,        // = getSession
     export const key = "xxx";          // 配置键名（= pi-chamber.json 里那一段的名字）
     export const toolNames = ["xxx"];  // 本插件占用的工具名（框架用它做"归属"，见下）
     export function create(ctx) { … }  // → ToolDefinition | null（null = 本次不注入，如深度到顶）
+    // 可选（有状态的插件才要）：从一条 toolResult 里取出本插件状态，供恢复现场用
+    export function stateOf(message) { … } // → state | null
     ```
-    `ctx = { bus, cwd, depth, config, getSession, modelRuntime, spawnSession, closeChild }` ——
+    `ctx = { bus, cwd, depth, config, getSession, modelRuntime, spawnSession, closeChild, restored, publishState }` ——
     `config` = 该插件那一段（框架已确认键存在；**`enabled` 由框架判，插件不用管**）；
     `getSession` = ★ **晚绑**取值器（建场时本场的 AgentSession 还没造出来，`execute` 时才读得到）；
-    `spawnSession` / `closeChild` = 注入的建场/收工原语（插件**不 import index.js**，避免循环依赖）。
+    `spawnSession` / `closeChild` = 注入的建场/收工原语（插件**不 import index.js**，避免循环依赖）；
+    `restored` = 本插件从档案恢复出来的状态（没有则 null）；`publishState(state)` = 推状态（**已绑好本插件的 key**，帧长什么样归框架）。
+    ★ **总线出口唯一**：插件**不许自己 `bus.emit`**，要推状态就调 `publishState`（同 commands.js 的纪律）。
   - **配置**：`<cwd>/.pi/pi-chamber.json`（独立文件，**不**塞进 pi 的 `.pi/settings.json` —— pi 的 settings 是 global+project 两层深合并且 pi 自己会回写它，塞进去有被冲掉的风险）。随目录走 = 符合"一个 cwd = 一个 agent"。
   - **缺省 `enabled = false`**：不给默认能力（派单要花钱，得你点头）+ 零迁移成本。
   - **注册与激活是两件事**（这是热更的前提）：**注册**（工具存不存在）只在建场时定（`customTools` 只在构造时赋值，reload 改不了它）；**激活**（工具现在活不活）每次都可以重算（`setActiveToolsByName` 是公开 API，顺手重建系统提示词）。所以：**插件工具恒注册，`enabled` 只影响激活**。
@@ -367,6 +379,13 @@ type Info = { input, output, cacheRead, cacheWrite, cost,        // = getSession
   - **生效时机**：**激活**能 `/reload` 热更（chamber 的 `/reload` 在 `session.reload()` 之后重读 `pi-chamber.json` 再收敛一次）；**注册**改不了，所以"配置从没这个键变成有这个键"需重开一次 Session（之后开关都是热的）。
   - **为什么不用 InlineExtension 做热更**：`DefaultResourceLoader` 有 `extensionFactories`，而且它在 `resourceLoader.reload()` 里被重新执行 —— 看着是官方热更的路。但 `reload()` 走的是 `_buildRuntime({ includeAllExtensionTools: true })`，而 `_refreshToolRegistry` 会把**所有扩展工具全部激活** → 会把 `enabled: false` 顶掉。`customTools` 不受这条影响 → chamber 保持控制权。
 - **subagent 插件（`agent-service/plugins/subagent.js`）**：agent 调 `subagent` 工具 = chamber **自己建一个真 Session**（不是 spawn 子进程）—— 于是白捡：名册里看得见、能点开看实时流式、能 abort、能翻页、有独立档案、成本单算。配置段：`{ enabled, model, maxConcurrent, timeoutMs }`；`model` 缺省**跟父场一致**（用 `getSession()` 晚绑取值，因为建场时本场 session 还没造出来）。与 index.js 的边界：本文件**不 import index.js**，`spawnSession`/`closeChild`/`getSession` 全由 `attachSession` 注入。四条硬规矩：① **闸在插件层**（深度/并发写在插件里，不写 `spawnSession` —— 否则用户手动新建也占额度）；② **递归靠创建期掉**（`depth >= MAX_DEPTH` 直接返回 null，框架就不注册本工具 —— 用户明确要求 subagent 不能再调 subagent）；③ **失败一律 return、绝不 throw**（throw 会把 details 换成 `{}`，前端就拿不到 `childSessionId`；代价是 `isError` 拿不到 true → 真值放 `details.status`）；④ **给模型的 content 只要「成本头 + 结论」**，绝不给 transcript（那等于白派）。子场成本经 `AgentToolResult.usage` 回传 → `getSessionStats()` 累加 toolResult 的 usage → **父场的 info 帧自动包含 subagent 开销**。
+- **todos 插件（`agent-service/plugins/todos.js`）**：★ **它是「模型 → 用户的进度汇报窗口」，不是「模型的自我管理工具」** —— 这句话是改这个插件前必须过的第一道闸：想影响模型行为就写进 tool description / promptGuidelines（系统提示词层，零成本、不破 cache），想影响体验就做在前端/帧层；**绝不做「定时注入提醒」这类催促**（代价是假更新 + 破 prompt cache，而假更新直接摧毁这个面板唯一的价值）。
+  具体：给 agent 一份**公开的待办清单**，前端在输入框上方实时显示（`pages/chat/TodosPanel.jsx`：进度条 + 清单），人和 agent 看的是同一份。配置段：`{ enabled }`。三个状态 `waiting | doing | done`（`doing` 是价值所在：没有它"进度"就只是个百分比，人不知道 agent 此刻在干哪一条）。**可信 > 及时**：状态一律用模型给的原始值，界面绝不猜（不推算、不自动打勾）。
+  - **前端自动退场**（纯展示层，不碰数据）：**全部 done → 自己折叠成一条绿细条**（`✔ 5/5 全部完成`），把地方让回输入框；点一下照样展开回看，模型下次更新（新的一条 waiting）自动重新展开。**不靠模型主动清空**（它经常忘；"干完了"该由界面自己认）—— 模型真想清就发空数组，面板整块消失（链路本来就是通的）。
+  - **全量替换**（学 Claude Code 的 TodoWrite）：模型每次把**整份清单**发过来，没有 add/update/remove 三个动作 —— 不发 id、不做合并、天然幂等，模型少一类犯错机会（改错条、丢条）；空数组 = 清空。
+  - **零手动持久化**：状态就放在工具返回的 `details = {todos}` 里 —— SDK 在 `message_end` 处把整条 toolResult（含 details）`appendMessage` 进 jsonl，**落盘是白送的**。恢复现场 = 沿**档案 leaf 链**回溯，取最后一条 `toolName==="todos"` 的 toolResult（`plugins/index.js` 的 `restorePluginStates`；不用 `getEntries()` 文件行序 —— 分叉档案会捡到别的分支的旧清单）。恢复只在 attach 时做一次，之后走内存的 `entry.pluginState`。
+  - **`state` 就是数组本身**（= 前端 `pluginState[场].todos`），不是 `{todos}` 包一层 —— 线帧、entry、前端 store 三处形状必须一字不差（踩过：包一层 → 前端 `.length` 为 undefined → 面板永不渲染）。
+- **插件状态帧（`agent.plugin.state`）**：`entry.pluginState = { [插件key]: state }`，四个触发点：① 工具每次写完（`publishState` → 存 entry + 推帧）；② `$conn.open` 遍历活跃表补推（**不只焦点** —— 后台 subagent 的进度条也要亮）；③ open（档案恢复出来的状态要送达）；④ close/delete 推 `state:null`（前端删条目）。前端存在 **sessions-store 的 `pluginState`（按 sessionId）**而不是 chat-store：状态是**按场**的、换会话不该丢；且**不随 sync 剪枝**（sync 只含 selectedCwd 的行，剪了会误伤别的目录/焦点的状态）。
 - **`spawnSession` / `focusSession`（建场与置焦拆开）**：`createSession` = 两者组合；`openSession` = 找/建运行时 + `focusSession`；subagent = **只 spawnSession**（不抢焦点、不动名册目录）。换目录时 **sync 必须在前、patch 必须在后**（幽灵不在盘上，sync 是整组替换会冲掉它）。
 - **prompt 语义**：空闲 = 起一轮（run）；running 期间输入自动走 SDK 插队（steer）—— 立即中断当前生成、等手头 toolCall 收尾再投递，被插的 run 不落定。忙闲唯一判据 = `AgentSession.isStreaming`（SDK 真值，服务端不另存状态）。被拒（压缩中/没模型）会吞掉这条文字 —— 已知并接受。
 - **命令分诊**：`promptSession` 最前面拦一道，命中 `BUILTINS`（`/model` `/name` `/level` `/compact` `/reload`）就地执行：**不起 run、不产生用户消息、不进 transcript**；未命中原样下传（扩展命令 / 模板 / skill 由 SDK 内部处理，未知命令当普通文本）。执行完（成功或失败）一律 `refreshFocus` 补推真值 + 命令清单（`/model` `/level` 改的是 SDK 内部状态，不进 `session.subscribe` 桥）；run **可返回 `{notice:{type,message}}`**，由分诊统一推 notice 帧（命令体保持不碰总线，文案自己拼）—— 目前只有 `/reload` 用（成功无独立帧，回执就靠它）。**命令一律不挡忙**（学 pi TUI：命令分支写在 `isStreaming` 之前）—— 忙时 `/compact` 会掐掉当前 run（已生成的那半截不丢，收成一条 `stopReason:"aborted"` 的消息），`/reload` 行为未定义；取舍已知并接受。

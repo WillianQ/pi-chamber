@@ -15,7 +15,17 @@
 //     bus, cwd, depth, config,          // config = 该插件那一段（框架已确认 enabled === true）
 //     getSession,                        // ★ 晚绑取值器：建场时本场的 AgentSession 还没造出来
 //     modelRuntime, spawnSession, closeChild,
+//     restored,                          // 本插件从档案里恢复出来的状态（没有则 null；见 restorePluginStates）
+//     publishState,                      // 发布状态（**已绑好本插件的 key**）：存 entry + 推 agent.plugin.state
 //   }
+//
+// ── 可选导出（有状态插件才要）──
+//   stateOf(toolResultMessage) → state | null
+//     从一条 toolResult 里取出本插件的状态，供**恢复现场**用（框架沿 leaf 链回溯、逐个问插件）。
+//     为什么数据源是 toolResult 而不是自定义 entry：toolResult 的 `details` 由 SDK 自动落盘
+//     （message_end → appendMessage），插件**零手动持久化**；自定义 entry 只留给"没有工具调用也想存"的场合。
+//
+//   ★ 总线出口唯一：插件**不许自己 bus.emit**，要推状态就调 ctx.publishState（同 commands.js 的纪律）。
 //
 // ── 配置：<cwd>/.pi/pi-chamber.json ──
 //   随目录走 —— 符合"一个 cwd = 一个 Agent Space，目录本身就定义了这个 agent"。
@@ -46,9 +56,10 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 import * as subagent from "./subagent.js";
+import * as todos from "./todos.js";
 
 /** 插件表：加新插件 = 加一行 import + 一行入表 */
-const PLUGINS = [subagent];
+const PLUGINS = [subagent, todos];
 
 /** 所有插件占用的工具名（收敛激活状态时要先把这些全摘掉，再按配置加回来） */
 export const ALL_PLUGIN_TOOL_NAMES = PLUGINS.flatMap((p) => p.toolNames);
@@ -83,12 +94,53 @@ export async function buildPluginTools(ctx) {
     const c = cfg[p.key];
     // ★ 键不存在 → chamber 完全不插手（用户自己装的同名扩展照常可用）
     if (!c || typeof c !== "object" || Array.isArray(c)) continue;
-    const t = p.create({ ...ctx, config: c });
+    const t = p.create({
+      ...ctx,
+      config: c,
+      restored: ctx.restored?.[p.key] ?? null,
+      // 绑好 key：插件只管"状态是什么"，帧长什么样归框架
+      publishState: (state) => ctx.publishPluginState?.(p.key, state),
+    });
     if (t) tools.push(t);
     else excluded.push(...p.toolNames); // 插件自己 decline（如 subagent 深度到顶）
     if (c.enabled === true && t) active.push(...p.toolNames);
   }
   return { tools, excluded, active };
+}
+
+/**
+ * 恢复现场：沿**档案 leaf 链**回溯，逐个问插件「这条 toolResult 是不是你的状态」。
+ *
+ * ★ 为什么沿 leaf 链而不是 `getEntries()` 的文件行序：分叉档案（分支/回溯）里文件序会捡到
+ *   别的分支的旧状态 —— 只有 leaf 链才是「这一场现在真实的那条线」。
+ * ★ 每个插件只认**第一条**（= 最近一次）自己的状态，认到就不再往更早翻。
+ *
+ * @param sm  SessionManager（档案对象）
+ * @returns { [pluginKey]: state }（没有状态的插件不出现）
+ */
+export function restorePluginStates(sm) {
+  const out = {};
+  const want = new Set(PLUGINS.filter((p) => p.stateOf).map((p) => p.key));
+  if (!want.size) return out;
+  let byId = null;
+  let cur = sm.getLeafEntry?.() ?? null;
+  let guard = 0;
+  while (cur && want.size && guard++ < 20000) {
+    if (cur.type === "message" && cur.message?.role === "toolResult") {
+      for (const p of PLUGINS) {
+        if (!want.has(p.key)) continue;
+        const st = p.stateOf(cur.message);
+        if (st) {
+          out[p.key] = st;
+          want.delete(p.key);
+        }
+      }
+    }
+    if (!cur.parentId) break;
+    byId ??= new Map(sm.getEntries().map((e) => [e.id, e]));
+    cur = byId.get(cur.parentId) ?? null;
+  }
+  return out;
 }
 
 /**

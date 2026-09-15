@@ -12,6 +12,7 @@
     "agent-smoke": "node scripts/agent-smoke.mjs",
     "prompt-smoke": "node scripts/prompt-smoke.mjs",
     "subagent-smoke": "node scripts/subagent-smoke.mjs",
+    "todos-smoke": "node scripts/todos-smoke.mjs",
     "web-smoke": "node scripts/web-smoke.mjs",
     "term-smoke": "node scripts/term-smoke.mjs",
     "tts-smoke": "node scripts/tts-smoke.mjs"

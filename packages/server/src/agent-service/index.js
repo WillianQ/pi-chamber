@@ -26,6 +26,8 @@
 //         agent.chat.message { m, open? }                            整条消息（裸帧，只发焦点）
 //         agent.chat.delta   { ci, k:"t"|"h"|"c", x, name? }         内容增量（裸帧，只发焦点；攒够 30 事件打包）
 //         agent.chat.notice  { sessionId?, type, message, … }        错误 / 重试提示（不写 messages）
+//   插件  agent.plugin.state { sessionId, state: {插件key:状态} | null }   插件状态（如 todos）：
+//         工具写完 / 连接 / open 推；close/delete 推 null；**广播不分焦点**（后台场次的进度也要动）
 //   上行  agent.sessions.list{cwd} · agent.session.{open,close,create,delete,prompt,abort}   一律 emit，无回执
 //         agent.chat.more_messages{sessionId,before} · agent.chat.toolResult{sessionId,toolCallId}   读数据用 request
 //
@@ -51,7 +53,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { BUILTINS, commandsOf } from "./commands.js";
 import { rowOfMessage, rowOfEntry, draftOf, isoOf, textOf } from "./messages.js";
-import { buildPluginTools, applyPluginActivation } from "./plugins/index.js";
+import { buildPluginTools, applyPluginActivation, restorePluginStates } from "./plugins/index.js";
 
 /** 出勤表：进程内所有活跃出勤（已创建/已打开） */
 const sessions = new Map(); // sessionId -> entry（见文件头）
@@ -108,6 +110,43 @@ function chatMessage(bus, payload) {
 
 function notice(bus, payload) {
   emit(bus, "agent.chat.notice", payload);
+}
+
+// ───────────────────────── 插件状态（agent.plugin.state） ─────────────────────────
+// 插件（如 todos）的状态：entry.pluginState = { [插件key]: state }，一份状态三处用：
+//   ① 推帧（工具写完即推）；② 连接 / open 时补推（重连、换设备、点开旧会话）；③ close/delete 清。
+// ★ 落档案不在这里做：状态数据在 toolResult.details 里，SDK 自动写盘（见 plugins/todos.js 头注）。
+// ★ 广播不分焦点（像 sessions.patch）：后台场次（subagent）的进度条也要动；带 sessionId 便于前端按场存。
+
+/** 本场插件状态快照（没有则 null） */
+function pluginStateOf(entry) {
+  const st = entry?.pluginState;
+  return st && Object.keys(st).length ? { ...st } : null;
+}
+
+/** 插件发布状态（**总线出口**，插件只调注入的 publishState，不自己 emit）
+ *  @param entry  可能为 null：建场期插件就造好了，但 execute 才真跑（晚绑见 attachSession） */
+function publishPluginState(bus, entry, key, state) {
+  if (!entry) return;
+  entry.pluginState ??= {};
+  if (state == null) delete entry.pluginState[key];
+  else entry.pluginState[key] = state;
+  emit(bus, "agent.plugin.state", {
+    sessionId: entry.agentSession.sessionId,
+    state: pluginStateOf(entry) ?? {},
+  });
+}
+
+/** 补推本场插件状态（连接 / open 时恢复现场）；没状态就不推（省帧） */
+function pushPluginState(bus, entry) {
+  const state = pluginStateOf(entry);
+  if (!state) return;
+  emit(bus, "agent.plugin.state", { sessionId: entry.agentSession.sessionId, state });
+}
+
+/** 场次没了 → state:null（前端删条目；否则行没了、状态还挂着） */
+function clearPluginState(bus, sessionId) {
+  emit(bus, "agent.plugin.state", { sessionId, state: null });
 }
 
 // ───────────────────────── 状态 / 真值读取 ─────────────────────────
@@ -525,16 +564,19 @@ function sharedModelRuntime() {
 
 /** 插件 ctx 的统一构造（建场与 /reload 重算共用一套）。
  *  ★ getSession 是晚绑取值器：建场时本场的 AgentSession 还没造出来。 */
-function pluginCtx(bus, { cwd, depth, modelRuntime, getSession }) {
+function pluginCtx(bus, { cwd, depth, modelRuntime, getSession, restored, publishPluginState: publish }) {
   return {
     bus,
     cwd,
     depth,
     modelRuntime,
     getSession,
+    restored,
     // ★ 必须绑 bus：spawnSession 的签名是 (bus, opts)，不绑就会把 opts 当成 bus 传进去
     spawnSession: (opts) => spawnSession(bus, opts),
     closeChild: (id) => closeChild(bus, id),
+    // 插件推状态（不绑 key，key 由 buildPluginTools 绑，见 plugins/index.js）
+    publishPluginState: publish,
   };
 }
 
@@ -554,8 +596,20 @@ async function attachSession(sm, bus, { fallbackName = "", parentId = null, dept
   // 插件：按 <cwd>/.pi/pi-chamber.json 决定**注册什么、激活什么**（见 plugins/index.js）。
   // ★ 晚绑：插件要在 execute 时读“本场”的模型/思考等级（用来继承给子场），但那会儿 session 还没造出来
   //   → 给一个 getSession() 取值器，建好之后回填（见下面的 self）。
+  // ★ 同理，entry 也是晚绑的：publishPluginState 要写 entry.pluginState，但插件在 entry 之前就造好了。
   let self = null;
-  const ctxOf = () => pluginCtx(bus, { cwd: absCwd, depth, modelRuntime, getSession: () => self });
+  let entryRef = null; // 同上：publishPluginState 要写 entry.pluginState，而 entry 在插件之后才造出来
+  // 恢复现场：沿 leaf 链问插件「你的状态是多少」（数据源 = 档案里的 toolResult.details）
+  const restored = restorePluginStates(sm);
+  const ctxOf = () =>
+    pluginCtx(bus, {
+      cwd: absCwd,
+      depth,
+      modelRuntime,
+      getSession: () => self,
+      restored,
+      publishPluginState: (key, state) => publishPluginState(bus, entryRef, key, state),
+    });
   const { tools: customTools, excluded, active } = await buildPluginTools(ctxOf());
 
   const { session } = await createAgentSession({
@@ -588,10 +642,12 @@ async function attachSession(sm, bus, { fallbackName = "", parentId = null, dept
     lastActiveAt: Date.now(), // 呆滞判定基准（见 sweepIdle）：建场时算一次，每轮落定（agent_settled）再刷
     parentPath, // 档案头里的 parentSession（持久）：非空 = 本场是 subagent
     parentId, // 父的 sessionId（尽力而为：父是幽灵/已删时为 null）
+    pluginState: restored, // 插件状态（键 = 插件 key）；数据源见 plugins/todos.js
     // /reload 之后重读 <cwd>/.pi/pi-chamber.json 并重新收敛插件开关。
     // 挂在 entry 上给命令域调（命令域保持孤岛：只调 entry 上的函数，不 import 本文件）。
     reapplyPlugins: async () => applyPluginActivation(session, (await buildPluginTools(ctxOf())).active),
   };
+  entryRef = entry; // 晚绑回填：此刻起插件的 publishState 才有地方落
   entry.unsubscribe = session.subscribe((evt) => {
     const { type, ...data } = evt;
     try {
@@ -677,6 +733,7 @@ async function focusSession(bus, entry) {
   }
   patchRows(bus, [rowOf(entry)]); // ★ open 也要发行灯（行 status 一律走 patch）
   await pushChatFull(bus);
+  pushPluginState(bus, entry); // 插件状态（从档案恢复出来的）：打开旧会话/重连后前端才有得显
 }
 
 // ───────────────────────── 生命周期：open / close / create / delete ─────────────────────────
@@ -729,6 +786,7 @@ async function closeSession(sessionId, bus) {
   takeSession(key);
   entry.agentSession.dispose();
   patchRows(bus, [{ id: key, status: "offline" }]);
+  clearPluginState(bus, key); // 运行时没了 → 插件状态也没了（档案里还在，重开会恢复）
   if (wasFocal) await pushChatFull(bus); // 焦点被清 → 前端整组清空
   console.log(`[agent] Session ${key} 已收工（运行时释放，档案保留）`);
 }
@@ -784,6 +842,7 @@ async function deleteSession(sessionId, bus) {
     }
   }
   if (wasFocal) await pushChatFull(bus);
+  clearPluginState(bus, key); // 这场没了 → 前端删插件状态条目
   patchRows(bus, [{ id: key, deleted: true }], await agentsSnapshot());
   if (!entry && !info) notice(bus, { sessionId: key, type: "error", message: `Session 不存在: ${key}` });
   console.log(`[agent] Session ${key} 已销毁（${info ? "运行时 + 档案" : "幽灵，无档案"}）`);
@@ -976,6 +1035,9 @@ export function installAgentService(bus) {
   safeOn(bus, "$conn.open", async () => {
     await pushSessionsSync(bus, { fallback: true });
     await pushChatFull(bus);
+    // 插件状态补推：遍历活跃表（不只焦点 —— 后台 subagent 的进度条也要亮）。
+    // ★ 必须排在 sync 之后（前端靠它把状态填回来）
+    for (const entry of sessions.values()) pushPluginState(bus, entry);
   });
 
   // 换目录（Agent 下拉）：只改名册目录 + 推名册全量，不动 activeId、不切焦点
