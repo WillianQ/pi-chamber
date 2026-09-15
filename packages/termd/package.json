@@ -1,0 +1,20 @@
+{
+  "name": "@pi-chamber/termd",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "pi-chamber 的终端守护进程：独立进程持有 node-pty（chamber 重启不杀终端）。另暴露 spawn.js 给 chamber 探活/拉起",
+  "exports": {
+    "./spawn.js": "./src/spawn.js"
+  },
+  "scripts": {
+    "start": "node src/daemon.js",
+    "test": "node --test",
+    "smoke": "node scripts/smoke.mjs",
+    "termd": "node scripts/termd.mjs"
+  },
+  "dependencies": {
+    "@lydell/node-pty": "^1.2.0-beta.15",
+    "ws": "^8.21.3"
+  }
+}

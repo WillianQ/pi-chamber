@@ -1,0 +1,24 @@
+{
+  "name": "pi-chamber",
+  "version": "1.0.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "description": "pi-chamber monorepo：packages/{bus,server,web} —— 让 pi 编码 agent 的出勤成为可远程驱动、流式对话的控制对象",
+  "scripts": {
+    "dev": "pnpm -r --parallel --stream --if-present dev",
+    "dev:server": "pnpm --dir packages/server dev",
+    "dev:web": "pnpm --dir packages/web dev",
+    "start": "pnpm --dir packages/server start",
+    "bg": "node scripts/bg.mjs",
+    "build": "pnpm --dir packages/web build",
+    "test": "pnpm --dir packages/server test && pnpm --dir packages/termd test",
+    "smoke": "pnpm --dir packages/server smoke",
+    "agent-smoke": "pnpm --dir packages/server agent-smoke",
+    "prompt-smoke": "pnpm --dir packages/server prompt-smoke",
+    "web-smoke": "pnpm --dir packages/server web-smoke",
+    "termd": "node packages/termd/scripts/termd.mjs",
+    "term-smoke": "pnpm --dir packages/server term-smoke",
+    "termd-smoke": "pnpm --dir packages/termd smoke"
+  }
+}

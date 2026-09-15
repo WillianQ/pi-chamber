@@ -1,0 +1,377 @@
+import { useEffect } from "react";
+import { CopyOutlined, SoundOutlined } from "@ant-design/icons";
+import MarkdownRenderer from "../../components/MarkdownRenderer.jsx";
+import CollapseCard from "../../components/CollapseCard.jsx";
+import { T } from "../../theme/tokens.js";
+import { chatActions, useTTSStore } from "../../stores";
+
+// 单条消息 = 一行"记账式"记录（无气泡）：角色标签行 + 正文平铺。
+// 全角色与档案 1:1；渲染层按 role 选样式，未知 role 走兜底不崩。
+// 视觉：不同 role 用不同背景色区分；assistant 透明（正文是主角，不给它加框）。
+// 颜色/字号零字面量：全从 theme/tokens.js 语义层取。
+//
+// 数据来源 = chat-store 的 Message（与实时帧 + 翻页同构）：
+//   assistant.blocks[] 带 ci（增量按 ci 入格）；toolCall 的 args 是字符串（流式中是半截 JSON）；
+//   toolResult 的 text 被服务端裁到前 50 字 + truncated → 展开时走 chat.toolResult 要全文。
+
+const ROLE_META = {
+  user: { label: "你", color: T.color.user, bg: T.color.userRowBg }, // 浅蓝整块：用户输入一眼认；无标签行，身份靠色块
+  assistant: { label: "pi", color: T.color.assistant, bg: "transparent" }, // 无标签行，透明底
+  toolResult: { label: "工具结果", color: T.color.tool, bg: T.color.toolRowBg },
+  bashExecution: { label: "! 命令", color: T.color.bash, bg: T.color.bashRowBg },
+  custom: { label: "扩展消息", color: T.color.custom, bg: T.color.customRowBg },
+  branchSummary: { label: "分支摘要", color: T.color.summary, bg: T.color.summaryRowBg },
+  compactionSummary: { label: "压缩摘要", color: T.color.summary, bg: T.color.summaryRowBg },
+};
+
+const STOP_HINT = {
+  length: { text: "输出被截断", color: T.color.warn },
+  aborted: { text: "已中断", color: T.color.pending },
+  error: { text: "出错", color: T.color.error },
+  deferred: { text: "异步挂起", color: T.color.tool },
+};
+
+/** 一条 assistant 消息 → 纯文本：text 块拼接（thinking/toolCall 天然不在内） */
+function msgCopyText(m) {
+  const tb = (m.blocks || [])
+    .filter((b) => b.type === "text" && b.text)
+    .map((b) => b.text)
+    .join("\n");
+  return (tb || m.text || "").trim();
+}
+
+/** role → 行容器样式：背景色区分；assistant 透明且零内边距/零外边距
+ *  （间距统一由卡片/文本块自己的 margin 控制，否则跨消息的卡片间距会多出容器 padding，宽窄不一） */
+function rowStyle(role, { divider = false } = {}) {
+  const meta = ROLE_META[role];
+  if (role === "assistant" && !divider)
+    return { background: "transparent", borderRadius: T.radius.base, padding: "0 14px", marginBottom: 0 };
+  return {
+    background: meta ? meta.bg : T.color.plainRowBg,
+    borderRadius: 0, // 通栏整块：撑满后圆角不再需要
+    padding: divider ? "6px 14px" : "10px 14px",
+    marginBottom: 10,
+    ...(divider ? { textAlign: "center" } : null),
+  };
+}
+
+function LabelLine({ role, extra, error }) {
+  const meta = ROLE_META[role] || { label: role || "?", color: T.color.tool };
+  return (
+    <div
+      style={{
+        fontFamily: T.fontFamily.mono,
+        fontSize: T.fontSize.xs,
+        lineHeight: T.lineHeight.xs,
+        marginBottom: 4,
+        display: "flex",
+        gap: 8,
+        alignItems: "baseline",
+        flexWrap: "wrap",
+      }}
+    >
+      <span style={{ color: meta.color, fontWeight: 600 }}>{meta.label}</span>
+      {extra && <span style={{ color: T.color.textMuted }}>{extra}</span>}
+      {error && <span style={{ color: T.color.error }}>失败</span>}
+    </div>
+  );
+}
+
+const preStyle = {
+  margin: 0,
+  fontFamily: T.fontFamily.mono,
+  fontSize: T.fontSize.sm,
+  lineHeight: T.lineHeight.sm,
+  color: T.color.textBody,
+  whiteSpace: "pre-wrap",
+  wordBreak: "break-word",
+};
+
+/** 可折叠区（工具输出/命令回显）：summary 一行预览，展开看全文。
+ *  onOpen：展开时回调（toolResult 被裁过 → 这时候才去要全文）。 */
+function Fold({ preview, children, defaultOpen = false, onOpen }) {
+  return (
+    <details
+      open={defaultOpen}
+      onToggle={(e) => {
+        if (e.currentTarget.open) onOpen?.();
+      }}
+      style={{ marginTop: 2 }}
+    >
+      <summary
+        style={{
+          fontFamily: T.fontFamily.mono,
+          fontSize: T.fontSize.xs,
+          color: T.color.textMuted,
+          cursor: "pointer",
+          userSelect: "none",
+          whiteSpace: "pre-wrap",
+          wordBreak: "break-word",
+        }}
+      >
+        {preview}
+      </summary>
+      <div style={{ paddingTop: 6 }}>{children}</div>
+    </details>
+  );
+}
+
+/** 工具结果正文：被裁过（truncated）就在**挂载时**自动要全文
+ *  （CollapseCard 收起时不挂 children → 挂载 = 用户刚展开）。 */
+function ToolResultBody({ result }) {
+  useEffect(() => {
+    if (result?.truncated && result.toolCallId) chatActions.expandToolResult(result.toolCallId);
+  }, [result?.truncated, result?.toolCallId]);
+  return <pre style={preStyle}>{result?.text || "（空结果）"}</pre>;
+}
+
+/** assistant 的小框列表：text → markdown；thinking / toolCall → CollapseCard 小卡片；未知块兜底 */
+function BlockItem({ b, streaming, result }) {
+  if (b.type === "text") {
+    return b.text ? (
+      <div style={{ marginTop: 4 }}>
+        <MarkdownRenderer content={b.text} />
+      </div>
+    ) : null;
+  }
+  if (b.type === "thinking") {
+    // 紫色思考卡：始终收起（流式中也不展开——内容忽高忽低会带动滚动条乱跳）；点卡片任意处开合
+    return (
+      <CollapseCard
+        tone="thinking"
+        header={streaming ? `✦ Thinking... · ${b.text.length}` : b.text ? `✦ Think · ${b.text.length}` : "✦ Think · Empty"}
+      >
+        <div
+          style={{
+            fontStyle: "italic",
+            color: T.md.thinkingText,
+            fontSize: T.fontSize.sm,
+            lineHeight: T.lineHeight.sm,
+            whiteSpace: "pre-wrap",
+            wordBreak: "break-word",
+          }}
+        >
+          {b.redacted ? "（思考内容被安全过滤隐去）" : b.text}
+        </div>
+      </CollapseCard>
+    );
+  }
+  if (b.type === "toolCall") {
+    // 绿=正常 / 红=出错（背景跟着结果状态翻转）；结果按 toolCallId 配进卡片内嵌，收起态标题也有 ✓/✗/⏳
+    const state = !result ? " · ⏳" : result.isError ? " · ✗ 失败" : " · ✓";
+    return (
+      <CollapseCard tone={result?.isError ? "error" : "ok"} header={`⚙ Tool · ${b.name || "(未知工具)"}${state}`}>
+        <pre style={preStyle}>{b.args}</pre>
+        {result ? (
+          <>
+            <div style={{ borderTop: `1px dashed ${T.color.dashedDivider}`, margin: "8px 0 6px" }} />
+            <div
+              style={{
+                fontFamily: T.fontFamily.mono,
+                fontSize: T.fontSize.xs,
+                color: result.isError ? T.color.error : T.color.textMuted,
+                marginBottom: 4,
+              }}
+            >
+              ↳ 返回{result.isError ? " · 失败" : ""}
+              {result.truncated ? " · 已截断，展开加载全文" : ""}
+            </div>
+            <ToolResultBody result={result} />
+          </>
+        ) : (
+          <>
+            <div style={{ borderTop: `1px dashed ${T.color.dashedDivider}`, margin: "8px 0 6px" }} />
+            <div style={{ fontFamily: T.fontFamily.mono, fontSize: T.fontSize.xs, color: T.color.pending }}>
+              ⏳ 执行中，结果到达自动显示
+            </div>
+          </>
+        )}
+      </CollapseCard>
+    );
+  }
+  // 未知块兜底：可展开看 raw，不崩
+  return (
+    <CollapseCard header={`? 未知块 · ${b.type}`}>
+      <pre style={preStyle}>{b.raw ?? JSON.stringify(b, null, 2)}</pre>
+    </CollapseCard>
+  );
+}
+
+export default function MessageBlock({ msg, streaming, resultsMap }) {
+  const { role, text } = msg;
+  // TTS 朗读控制（顶层 hook：喇叭 = activeKey 命中且非 idle → 变暂停/停止）
+  const ttsPhase = useTTSStore((s) => s.phase);
+  const ttsActive = useTTSStore((s) => s.activeKey);
+
+  switch (role) {
+    case "user":
+      // 无标签，身份由色块表达
+      return (
+        <div style={rowStyle(role)}>
+          <div
+            style={{
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-word",
+              color: T.color.textPrimary,
+              fontSize: T.fontSize.sm,
+              lineHeight: T.lineHeight.base,
+            }}
+          >
+            {text}
+          </div>
+        </div>
+      );
+
+    case "assistant": {
+      const hint = STOP_HINT[msg.stopReason];
+      const blocks = msg.blocks;
+      return (
+        <div style={rowStyle(role)}>
+          {blocks?.length ? (
+            blocks.map((b) => (
+              <BlockItem
+                key={b.ci ?? b.id}
+                b={b}
+                streaming={streaming}
+                result={b.type === "toolCall" && b.id ? resultsMap?.get(b.id) : undefined}
+              />
+            ))
+          ) : text ? (
+            <MarkdownRenderer content={text} />
+          ) : (
+            <div style={{ fontFamily: T.fontFamily.mono, fontSize: T.fontSize.xs, color: T.color.textFaint }}>…</div>
+          )}
+          {hint && (
+            <div style={{ fontFamily: T.fontFamily.mono, fontSize: T.fontSize.xs, color: hint.color, marginTop: 4 }}>
+              · {hint.text}
+              {msg.stopReason === "error" && msg.errorMessage ? `：${String(msg.errorMessage).slice(0, 200)}` : ""}
+            </div>
+          )}
+          {/* 底排操作：复制 + 朗读本条纯文本（thinking/toolCall 不含）；open 草稿未敲定不显示
+              播放/暂停/停止统一在消息流右下角的浮动控制条，这里只有触发钮 */}
+          {(() => {
+            if (msg.open) return null;
+            const copyText = msgCopyText(msg);
+            if (!copyText) return null;
+            const mine = ttsActive === msg.key && ttsPhase !== "idle";
+            return (
+              <div className="pc-msgacts" style={{ display: "flex", justifyContent: "start", gap: 2, marginTop: 8 }}>
+                <button
+                  className="pc-msgacts-btn"
+                  title="复制纯文本"
+                  onClick={() => navigator.clipboard?.writeText(copyText).catch(() => {})}
+                >
+                  <CopyOutlined />
+                </button>
+                <button
+                  className="pc-msgacts-btn"
+                  title={mine ? "正在朗读本条，点击从头重读" : "朗读本条回答"}
+                  onClick={() => {
+                    const s = useTTSStore.getState();
+                    s.start("manual", msg.key); // 无条件抢权：正在读的 live/其他手动全停（含重读同条）
+                    s.inject(copyText);
+                    s.finish();
+                  }}
+                  style={mine ? { color: T.color.primary } : undefined}
+                >
+                  <SoundOutlined />
+                </button>
+              </div>
+            );
+          })()}
+        </div>
+      );
+    }
+
+    case "toolResult":
+      // 孤儿行（没被任何 toolCall 认领）：照常成行；裁过就展开时补全文
+      return (
+        <div style={rowStyle(role)}>
+          <LabelLine role={role} extra={msg.toolName} error={msg.isError} />
+          <Fold
+            preview={`${text.split("\n")[0] || "（空结果）"}${msg.truncated ? " …（点开加载全文）" : ""}`}
+            onOpen={() => msg.truncated && chatActions.expandToolResult(msg.toolCallId)}
+          >
+            <pre style={preStyle}>{text}</pre>
+          </Fold>
+        </div>
+      );
+
+    case "bashExecution": {
+      const bad = msg.exitCode != null && msg.exitCode !== 0;
+      return (
+        <div style={rowStyle(role)}>
+          <LabelLine
+            role={role}
+            extra={
+              msg.truncated ? "（输出已截断）" : bad ? `exit ${msg.exitCode}` : msg.cancelled ? "已取消" : null
+            }
+            error={bad}
+          />
+          <div
+            style={{
+              fontFamily: T.fontFamily.mono,
+              fontSize: T.fontSize.sm,
+              color: bad ? T.color.error : T.color.bash,
+              wordBreak: "break-all",
+            }}
+          >
+            $ {msg.command}
+          </div>
+          {text && (
+            <Fold preview={`${text.split("\n").length} 行输出`}>
+              <pre style={preStyle}>{text}</pre>
+            </Fold>
+          )}
+        </div>
+      );
+    }
+
+    case "custom":
+      if (msg.display === false) return null; // 只进上下文，不进 UI
+      return (
+        <div style={rowStyle(role)}>
+          <LabelLine role={role} extra={msg.customType} />
+          <div style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", color: T.color.textSecondary, fontSize: T.fontSize.sm }}>
+            {text}
+          </div>
+        </div>
+      );
+
+    case "branchSummary":
+    case "compactionSummary":
+      return (
+        <div style={rowStyle(role, { divider: true })}>
+          <Fold
+            preview={
+              msg.open
+                ? `—— 压缩中 ——`
+                : msg.error
+                  ? `—— 压缩失败 ——`
+                  : `—— ${ROLE_META[role].label} ——`
+            }
+          >
+            <div
+              style={{
+                whiteSpace: "pre-wrap",
+                color: msg.error ? T.color.error : T.color.textMuted,
+                fontSize: T.fontSize.sm,
+                textAlign: "left",
+              }}
+            >
+              {text}
+            </div>
+          </Fold>
+        </div>
+      );
+
+    default:
+      // 未知角色兜底：灰色原文，不崩、可见
+      return (
+        <div style={rowStyle(role)}>
+          <LabelLine role={role || `unknown:${JSON.stringify(role)}`} />
+          <pre style={preStyle}>{text || JSON.stringify(msg, null, 2)}</pre>
+        </div>
+      );
+  }
+}

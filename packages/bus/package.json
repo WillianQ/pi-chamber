@@ -1,0 +1,7 @@
+{
+  "name": "@pi-chamber/bus",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "chamber 总线协议核心（零依赖纯 ESM，server 与 web 共享）：createBus + node/browser transport。不设 exports 限制，允许子路径 import。"
+}

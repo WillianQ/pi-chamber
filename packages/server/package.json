@@ -1,0 +1,32 @@
+{
+  "name": "@pi-chamber/server",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "pi-chamber 后端：HTTP(JWT 登录) + WS/Bus 协议；Agent 域驱动 pi 编码 agent 出勤",
+  "scripts": {
+    "dev": "cross-env PORT=3001 LOG=1 node --watch --watch-path=src --watch-path=../bus --watch-path=.env src/server.js",
+    "start": "node src/server.js",
+    "test": "node --test",
+    "smoke": "node scripts/smoke.js",
+    "agent-smoke": "node scripts/agent-smoke.mjs",
+    "prompt-smoke": "node scripts/prompt-smoke.mjs",
+    "web-smoke": "node scripts/web-smoke.mjs",
+    "term-smoke": "node scripts/term-smoke.mjs",
+    "tts-smoke": "node scripts/tts-smoke.mjs"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "^0.84.4",
+    "@pi-chamber/bus": "workspace:*",
+    "@pi-chamber/termd": "workspace:*",
+    "chokidar": "^5.0.0",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "ignore": "^7.0.9",
+    "jsonwebtoken": "^9.0.3",
+    "ws": "^8.21.3"
+  },
+  "devDependencies": {
+    "cross-env": "^7.0.3"
+  }
+}

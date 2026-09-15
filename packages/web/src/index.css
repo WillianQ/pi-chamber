@@ -1,0 +1,109 @@
+@import "antd/dist/reset.css";
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+/* 全局深色底/字（静态 CSS 拿不到 token，取 var(--pc-*)；字面量仅作首帧白闪兜底） */
+body {
+  background: #0f1115;
+  background: var(--pc-bg-page, #0f1115);
+  color: #e6e8eb;
+  color: var(--pc-text-high, #e6e8eb);
+}
+
+/* 深色细滚动条（颜色同 palette 滚动条 token，避免系统默认亮条刺眼） */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--pc-scroll-thumb, #2c333d) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--pc-scroll-thumb, #2c333d);
+  border-radius: 4px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--pc-scroll-thumb-hover, #3d4551);
+}
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* 消息文本保留换行 */
+.msg-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* session 四灯：橙（开机中）/蓝（运行中）呼吸，颜色由 inline style 给 */
+@keyframes pc-lamp-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+/* 语音录音圆点闪烁 */
+@keyframes pc-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.25;
+  }
+}
+
+/* bar 图标 hover（壳层小件：active 主色由 inline style 给，hover 用变量顶一下）
+   拖拽把手 hover 显示主色细条，暗示可调宽 */
+.pc-baritem:hover {
+  color: var(--pc-text-high, #e6e8eb) !important;
+  background: var(--pc-bg-hover, #1d2229);
+}
+.pc-hresize:hover,
+.pc-hresize:active {
+  background: rgba(97, 175, 239, 0.45);
+}
+
+/* 目录行 hover 底色（导航/文件列表，与 Session 行同体验） */
+.pc-dirrow:hover {
+  background: var(--pc-bg-hover, #1d2229);
+}
+
+/* 目录行操作钮（常显：触屏无 hover，常驻行尾；按钮自身 hover 提亮由 antd Button 自带） */
+.pc-dirrow .pc-acts { flex-shrink: 0; }
+
+/* 移动端横向翻页条（scroll-snap）：隐藏横向滚动条（窄屏/调试时也干净） */
+.pc-hsnap { scrollbar-width: none; }
+.pc-hsnap::-webkit-scrollbar { display: none; }
+
+/* assistant 消息底排操作（朗读/复制）：低对比常驻，hover 提亮 */
+.pc-msgacts { opacity: 0.4; transition: opacity 0.15s; }
+.pc-msgacts:hover { opacity: 1; }
+.pc-msgacts-btn {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: var(--pc-text-muted, #6b7280);
+  font-size: 16px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+}
+.pc-msgacts-btn:hover { color: var(--pc-text-high, #e6e8eb); background: var(--pc-bg-hover, #1d2229); }
+.pc-dirname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+
