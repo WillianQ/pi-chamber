@@ -1,0 +1,9 @@
+{
+  "subagent": {
+    "enabled": true,
+    "model": "ds/deepseek-v4-flash",
+    "maxConcurrent": 4,
+    "timeoutMs": 1800000
+  },
+  "todos": { "enabled": true }
+}
