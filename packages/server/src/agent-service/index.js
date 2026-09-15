@@ -51,6 +51,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { BUILTINS, commandsOf } from "./commands.js";
 import { rowOfMessage, rowOfEntry, draftOf, isoOf, textOf } from "./messages.js";
+import { buildPluginTools, applyPluginActivation } from "./plugins/index.js";
 
 /** 出勤表：进程内所有活跃出勤（已创建/已打开） */
 const sessions = new Map(); // sessionId -> entry（见文件头）
@@ -157,6 +158,7 @@ function rowOf(entry) {
     status: statusOf(entry),
     messageCount: stats?.totalMessages ?? 0,
     updateTime: new Date().toISOString(),
+    ...subagentFields(entry.parentPath, entry.parentId),
   };
 }
 
@@ -168,9 +170,29 @@ function displayNameOf(info) {
   return first && first !== "(no messages)" ? first : "";
 }
 
-/** 磁盘行（读盘）：档案在册但运行时可能不在 → status 现查活跃表 */
-function rowOfInfo(info) {
+// ───────── subagent 标记（名册行的两个附加字段） ─────────
+// isSubAgent 的唯一来源 = **档案头的 parentSession**（pi 的官方字段，语义 = "本场派生自哪一场"）：
+//   写在建场时（SessionManager.create 的 parentSession），读在 getHeader()/SessionInfo.parentSessionPath。
+//   好处：重连、换目录（sync 整组替换）、chamber 重启 —— 全都丢不了，且零额外 IO（header 本来就要读）。
+// parentId = "父是谁"（前端做缩进用）：尽力而为 —— 父是幽灵/已删时为 null，但 isSubAgent 仍为 true。
+//   两字段恒出现（不省字节）：false / null 也是真值，省了反而让前端要区分 undefined 与 false。
+function subagentFields(parentPath, parentId) {
+  const isSubAgent = !!parentPath;
+  return { isSubAgent, parentId: isSubAgent ? (parentId ?? null) : null };
+}
+
+/** 路径归一（仅用于"是不是同一个文件"的比较）：win/mac 不区分大小写。
+ *  与 unlinkSessionFile 的白名单闸同口径 —— 两边必须一致，否则父子的路径对不上。 */
+function foldPath(p) {
+  const r = resolve(String(p ?? ""));
+  return process.platform === "linux" ? r : r.toLowerCase();
+}
+
+/** 磁盘行（读盘）：档案在册但运行时可能不在 → status 现查活跃表。
+ *  byPath = 本目录的 档案路径→sessionId 表（父的 sessionId 前端才知道怎么缩进）。 */
+function rowOfInfo(info, byPath) {
   const live = sessions.get(info.id);
+  const parentId = info.parentSessionPath ? (byPath?.get(foldPath(info.parentSessionPath)) ?? null) : null;
   return {
     id: info.id,
     cwd: info.cwd,
@@ -178,6 +200,7 @@ function rowOfInfo(info) {
     status: live ? statusOf(live) : "offline",
     messageCount: info.messageCount,
     updateTime: info.modified instanceof Date ? info.modified.toISOString() : String(info.modified ?? ""),
+    ...subagentFields(info.parentSessionPath, parentId),
   };
 }
 
@@ -209,7 +232,9 @@ async function agentsSnapshot() {
 /** 某目录下的出勤史行（读盘；活跃场次的状态现查） */
 async function rowsOfCwd(dir) {
   const infos = await SessionManager.list(dir);
-  return infos.map(rowOfInfo);
+  // 父子解析表：档案头里存的是**父的档案路径**，换成 sessionId（前端拿 id 做缩进）
+  const byPath = new Map(infos.map((i) => [foldPath(i.path), i.id]));
+  return infos.map((info) => rowOfInfo(info, byPath));
 }
 
 /** 连接 / 换目录：推名册全量（= 前端 sessions-store 数据组，键名一字不差）
@@ -498,22 +523,59 @@ function sharedModelRuntime() {
   return modelRuntimePromise;
 }
 
+/** 插件 ctx 的统一构造（建场与 /reload 重算共用一套）。
+ *  ★ getSession 是晚绑取值器：建场时本场的 AgentSession 还没造出来。 */
+function pluginCtx(bus, { cwd, depth, modelRuntime, getSession }) {
+  return {
+    bus,
+    cwd,
+    depth,
+    modelRuntime,
+    getSession,
+    // ★ 必须绑 bus：spawnSession 的签名是 (bus, opts)，不绑就会把 opts 当成 bus 传进去
+    spawnSession: (opts) => spawnSession(bus, opts),
+    closeChild: (id) => closeChild(bus, id),
+  };
+}
+
 /** 给一个 SessionManager（档案对象）配齐运行时并登记进表；bus 显式传入（事件桥要把 SDK 动静推给前端） */
-async function attachSession(sm, bus, { fallbackName = "" } = {}) {
+async function attachSession(sm, bus, { fallbackName = "", parentId = null, depth = 0, model, thinkingLevel } = {}) {
   const absCwd = sm.getCwd();
   const sessionId = sm.getSessionId();
+  // subagent 标记的**唯一来源**：档案头里的 parentSession。从档案读、不从参数传 ——
+  // 这样「新建」与「从档案打开」两条路天然一致，不会有一边忘了传。
+  const parentPath = sm.getHeader()?.parentSession ?? null;
 
   const resourceLoader = new DefaultResourceLoader({ cwd: absCwd, agentDir: getAgentDir() });
   await resourceLoader.reload(); // 扫该 agent 的扩展 / skills / prompts
 
   const modelRuntime = await sharedModelRuntime();
+
+  // 插件：按 <cwd>/.pi/pi-chamber.json 决定**注册什么、激活什么**（见 plugins/index.js）。
+  // ★ 晚绑：插件要在 execute 时读“本场”的模型/思考等级（用来继承给子场），但那会儿 session 还没造出来
+  //   → 给一个 getSession() 取值器，建好之后回填（见下面的 self）。
+  let self = null;
+  const ctxOf = () => pluginCtx(bus, { cwd: absCwd, depth, modelRuntime, getSession: () => self });
+  const { tools: customTools, excluded, active } = await buildPluginTools(ctxOf());
+
   const { session } = await createAgentSession({
     cwd: absCwd,
     agentDir: getAgentDir(),
     sessionManager: sm,
     resourceLoader,
     modelRuntime,
+    customTools,
+    // 插件自己 decline（如 subagent 深度到顶）→ 连同名扩展工具一起挡掉，
+    // 否则 agent 目录里装了个同名扩展就能绕过插件的闸
+    ...(excluded.length ? { excludeTools: excluded } : {}),
+    // 子场继承父场的脑子（由插件在派单时显式传入）；普通建场不传 → 走 SDK 默认 / 档案恢复
+    ...(model ? { model } : {}),
+    ...(thinkingLevel ? { thinkingLevel } : {}),
   });
+  self = session;
+  // ★ 构造时 customTools 会被**全部激活** → 立刻按配置收敛一次。
+  //   “开关”是**激活**不是注册（恒注册）—— 这才使得 /reload 能热更开关，不用重开会话。
+  applyPluginActivation(session, active);
 
   const entry = {
     agentSession: session,
@@ -524,6 +586,11 @@ async function attachSession(sm, bus, { fallbackName = "" } = {}) {
     unsubscribe: null,
     commandsPromise: null, // / 命令清单懒建缓存（/reload 时作废）
     lastActiveAt: Date.now(), // 呆滞判定基准（见 sweepIdle）：建场时算一次，每轮落定（agent_settled）再刷
+    parentPath, // 档案头里的 parentSession（持久）：非空 = 本场是 subagent
+    parentId, // 父的 sessionId（尽力而为：父是幽灵/已删时为 null）
+    // /reload 之后重读 <cwd>/.pi/pi-chamber.json 并重新收敛插件开关。
+    // 挂在 entry 上给命令域调（命令域保持孤岛：只调 entry 上的函数，不 import 本文件）。
+    reapplyPlugins: async () => applyPluginActivation(session, (await buildPluginTools(ctxOf())).active),
   };
   entry.unsubscribe = session.subscribe((evt) => {
     const { type, ...data } = evt;
@@ -553,9 +620,8 @@ function takeSession(sessionId) {
  *  ② fs.unlink 绝不递归、绝不碰目录。文件已不在（幽灵/并发删）视为成功。 */
 async function unlinkSessionFile(file, key) {
   const real = resolve(String(file ?? ""));
-  const fold = (p) => (process.platform === "linux" ? p : p.toLowerCase()); // win/mac 不区分大小写，比较同口径
-  const root = fold(resolve(join(getAgentDir(), "sessions"))) + sep;
-  if (!real.endsWith(".jsonl") || !fold(real).startsWith(root)) {
+  const root = foldPath(join(getAgentDir(), "sessions")) + sep;
+  if (!real.endsWith(".jsonl") || !foldPath(real).startsWith(root)) {
     throw new Error(`拒绝删除可疑档案路径（不在 sessions 目录内）: ${file}`);
   }
   try {
@@ -564,6 +630,53 @@ async function unlinkSessionFile(file, key) {
     if (err?.code === "ENOENT") return; // 已经不在了 → 目标达成
     throw new Error(`档案删除失败 ${key}: ${err?.message ?? err}`);
   }
+}
+
+// ───────────────────────── 生命周期原语：建场 / 置焦 ─────────────────────────
+// 「建」与「上工」是两个关注点，拆开才好让别的调用方各取所需：
+//   createSession（用户新建） = spawnSession + focusSession
+//   openSession（用户打开）   = （找/建运行时）+ focusSession
+//   subagent（后台派单）      = 只 spawnSession —— **不抢焦点、不动名册目录**
+
+/** 原语①：建一份出勤（登记名册；不置焦、不动名册目录）。
+ *  失败一律 throw（调用方决定吞成 notice 还是转成工具错误），半成品不泄漏。 */
+async function spawnSession(bus, { cwd: cwdArg, fallbackName = "", parentPath = null, parentId = null, depth = 0, model, thinkingLevel } = {}) {
+  const absCwd = resolve(String(cwdArg ?? "").trim());
+  if (!absCwd) throw new Error("cwd 必填");
+
+  // parentPath 非空 = 本场是 subagent：写进档案头（pi 官方字段，语义 = "本场派生自哪一场"）
+  // → isSubAgent 天然持久（重连 / 换目录 / 重启都不丢）
+  const sm = SessionManager.create(absCwd, undefined, parentPath ? { parentSession: parentPath } : undefined);
+  let entry = null;
+  try {
+    entry = await attachSession(sm, bus, { fallbackName, parentId, depth, model, thinkingLevel });
+    // 插行 + agents 计数：新场是幽灵（还没落盘），rowsOfCwd 读不到它，必须显式补这一行
+    patchRows(bus, [rowOf(entry)], await agentsSnapshot());
+    return entry;
+  } catch (err) {
+    // attachSession 成功但推帧炸了 → 表里留一个没人管的运行时（看不见、关不掉）→ 摘表 + dispose
+    if (entry) {
+      takeSession(entry.agentSession.sessionId);
+      entry.agentSession.dispose();
+    }
+    throw err;
+  }
+}
+
+/** 原语②：置焦（名册目录跟着焦点走 + 发行灯 + 推对话全量）。
+ *  ★ 顺序硬约束：换目录时 sync 必须在前、patch 必须在后 ——
+ *    sync 是「整组替换」而 patch 是「合并」，反了的话刚建好的幽灵行会被 sync 冲掉。 */
+async function focusSession(bus, entry) {
+  const key = entry.agentSession.sessionId;
+  setActive(key);
+  if (cwd !== entry.cwd) {
+    // 焦点跨了目录（今天打不到：前端名册只含 selectedCwd 的行；但一旦有别的入口，
+    // 不跟着换就会出现「sessions-store 说 A、chat-store 说 B」的两 store 打架）
+    cwd = entry.cwd;
+    await pushSessionsSync(bus);
+  }
+  patchRows(bus, [rowOf(entry)]); // ★ open 也要发行灯（行 status 一律走 patch）
+  await pushChatFull(bus);
 }
 
 // ───────────────────────── 生命周期：open / close / create / delete ─────────────────────────
@@ -575,7 +688,8 @@ async function openSession(sessionId, bus) {
   try {
     let entry = sessions.get(key);
     if (!entry) {
-      const info = (await SessionManager.listAll()).find((s) => s.id === key);
+      const infos = await SessionManager.listAll();
+      const info = infos.find((s) => s.id === key);
       if (!info) {
         // 档案不存在：补真值帧（清 pending）+ 提示（**不动当前 chat**）
         patchRows(bus, [{ id: key, status: "offline" }]);
@@ -583,12 +697,15 @@ async function openSession(sessionId, bus) {
         console.log(`[agent] open 失败：档案不存在 ${key}`);
         return;
       }
+      // 父的 sessionId 要现查（档案头里存的是父的**路径**）—— listAll 已拿全，顺手建表
+      const byPath = new Map(infos.map((i) => [foldPath(i.path), i.id]));
       const sm = SessionManager.open(info.path);
-      entry = await attachSession(sm, bus, { fallbackName: displayNameOf(info) });
+      entry = await attachSession(sm, bus, {
+        fallbackName: displayNameOf(info),
+        parentId: info.parentSessionPath ? (byPath.get(foldPath(info.parentSessionPath)) ?? null) : null,
+      });
     }
-    setActive(key);
-    patchRows(bus, [{ id: key, status: statusOf(entry) }]); // ★ open 也要发行灯（行 status 一律走 patch）
-    await pushChatFull(bus);
+    await focusSession(bus, entry);
     console.log(`[agent] Session 已打开 ${key} @ ${entry.cwd}${entry.agentSession.isStreaming ? "（正在跑）" : ""}`);
   } catch (err) {
     // 建运行时/读档案炸了：也必须留帧，否则前端那一行永久 pending
@@ -616,29 +733,32 @@ async function closeSession(sessionId, bus) {
   console.log(`[agent] Session ${key} 已收工（运行时释放，档案保留）`);
 }
 
-/** 新建出勤（幽灵，惰性落盘）：建档案 → 置焦 → 名册插行 + chat 全量 */
-async function createSession(cwdArg, bus) {
-  const absCwd = resolve(String(cwdArg ?? "").trim());
-  if (!absCwd) {
-    notice(bus, { type: "error", message: "cwd 必填" });
-    return;
-  }
+/** subagent 用完即收工（释放运行时；**档案保留** → 名册行转 offline，随时可点开回看）。
+ *  ★ 焦点豁免：人正看着它就不动 —— 收了会把前端正在读的对话清空（与 sweepIdle 同款规矩）；
+ *    那种情况留给呆滞清理，人一切走焦点就自然纳入。
+ *  ★ 不抛：收工失败不能把工具的结果弄丢（账都算完了）。 */
+async function closeChild(bus, sessionId) {
+  const key = String(sessionId ?? "").trim();
+  if (!key || key === activeId || !sessions.has(key)) return false;
   try {
-    const sm = SessionManager.create(absCwd);
-    const entry = await attachSession(sm, bus);
-    const key = sm.getSessionId();
-    setActive(key);
-    if (cwd !== absCwd) {
-      // 建到别的目录：先把名册目录切过去（sync 会带 selectedCwd + agents），再补那行（幽灵不在盘上）
-      cwd = absCwd;
-      await pushSessionsSync(bus);
-    }
-    patchRows(bus, [rowOf(entry)], await agentsSnapshot());
-    await pushChatFull(bus);
-    console.log(`[agent] Session 已创建 ${key} @ ${absCwd}（档案惰性落盘，等首次回复写盘）`);
+    await closeSession(key, bus);
+    return true;
   } catch (err) {
-    // 此刻还没有 id（也就没有行）——前端清的是「新建」按钮的 loading，所以 notice 够了
-    console.error(`[agent] create 异常 ${absCwd}: ${err?.message ?? err}`);
+    console.error(`[agent] subagent 收工失败 ${key}: ${err?.message ?? err}`);
+    return false;
+  }
+}
+
+/** 新建出勤（幽灵，惰性落盘）：建场 + 置焦（= spawnSession + focusSession）。
+ *  建到别的目录时，名册目录由 focusSession 跟着焦点切过去。 */
+async function createSession(cwdArg, bus) {
+  try {
+    const entry = await spawnSession(bus, { cwd: cwdArg });
+    await focusSession(bus, entry);
+    console.log(`[agent] Session 已创建 ${entry.agentSession.sessionId} @ ${entry.cwd}（档案惰性落盘，等首次回复写盘）`);
+  } catch (err) {
+    // 此刻可能还没有 id（也就没有行）——前端清的是「新建」按钮的 loading，所以 notice 够了
+    console.error(`[agent] create 异常 ${cwdArg}: ${err?.message ?? err}`);
     notice(bus, { type: "error", message: `新建 Session 失败: ${err?.message ?? err}` });
   }
 }

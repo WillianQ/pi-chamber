@@ -37,6 +37,8 @@ pi-chamber 是一个**远程、跨平台的 agent 监控操作界面**：chamber
 | **SessionManager** | 档案的持久对象，**1:1 绑定一个 jsonl**，不能跨出勤共享；只共享 archive 目录与静态 API。 |
 | **Bus** | 共享总线协议机（`@pi-chamber/bus`）：本地双通道 + 网络 transport。进程内单例，WS 只是插在 transport 槽上的网线。 |
 | **termd（终端守护）** | chamber 的**子进程**（不是外部服务）：独立进程，**唯一持有 node-pty 的东西**（`packages/termd`）。chamber 只是它的客户端（私线 = `127.0.0.1:3002` + token，见 2.5），**协议不走 bus** —— 它自带一套 40 行线协议。这么分是为了让终端活过 chamber 重启：PTY 子进程挂在谁下面，谁重启就带走谁。 |
+| **subagent** | agent 通过 `subagent` 工具**派出去的一份新出勤**（不是子进程）：它就是一个普通 Session（独立 AgentSession + 独立 jsonl + 独立上下文窗口），只是档案头带 `parentSession` → 名册行 `isSubAgent:true` + `parentId`。好处 = 白捡整套 Session 能力（实时流式 / 可 open / 可 abort / 可翻页 / 成本单算）。递归靠 `depth` 在**创建期**掉（子场拿不到本工具）。**默认关闭**，要在 `<cwd>/.pi/pi-chamber.json` 里显式开（见第 4 章）。 |
+| **插件（plugin）** | `agent-service/plugins/` 下的一个能力单元：往 AgentSession 注入一个工具，**能不能用由 `<cwd>/.pi/pi-chamber.json` 决定**。目前只有 subagent 一个；抽这层是为了以后同类能力照同一套写。 |
 
 ### 2.2 对外用词约定
 
@@ -62,6 +64,7 @@ pnpm bg start|stop|status|restart  # 后台常驻版（detached 起后端 3000�
 pnpm dev:server / dev:web         # 只起一端（日常调后端/前端时各开一个终端）
 pnpm agent-smoke                  # Agent 域冒烟：名册 sync/patch + open/close/create/delete + 翻页 + 失败路径
 pnpm prompt-smoke                 # prompt 全流程：真实模型往返 + 帧语义断言（真写盘，用完即删幽灵）
+pnpm subagent-smoke               # subagent 域：让模型真调一次 subagent 工具，验「子 agent = 名册里的一行真 Session」
 pnpm web-smoke                    # 前端 store 冒烟：Node 里跑真前端代码消费活体帧（sessions/chat 两 store）
 pnpm termd start|stop|status|restart  # 终端守护进程（termd）；chamber 启动时也会自动探测并拉起
 pnpm termd-smoke                  # 终端域冒烟（直连 termd）：起/接管/回放/IO/resize/断开不杀/重连回放/名册
@@ -96,7 +99,7 @@ pnpm term-smoke                   # 终端域冒烟（走 chamber 全链路）+ 
 
 ```
 pi-chamber/
-├── package.json               # workspace 根脚本（dev/dev:server/dev:web/test/smoke/agent-smoke/prompt-smoke/web-smoke/termd/term-smoke/termd-smoke，见 2.4）
+├── package.json               # workspace 根脚本（dev/dev:server/dev:web/test/smoke/agent-smoke/prompt-smoke/subagent-smoke/web-smoke/termd/term-smoke/termd-smoke，见 2.4）
 ├── pnpm-workspace.yaml        # packages: ["packages/*"]
 ├── .npmrc                     # node-linker=hoisted（隔离式 node_modules 会破坏扩展 require 约定，勿改）
 ├── AGENTS.md  README.md  LICENSE
@@ -133,11 +136,14 @@ pi-chamber/
     │   │   ├── agent-service/          # Agent 域（唯一带子目录的：体量最大；各文件职责见文件头注）
     │   │   │   ├── index.js            #   名册表 + 焦点 activeId + 名册目录 cwd + 事件桥 + 生命周期 + prompt/abort + 翻页/补全 + 呆滞清理
     │   │   │   ├── commands.js         #   / 命令域（孤岛：不吃表不读焦点不摸 bus）
+    │   │   │   ├── plugins/            #   ★ 插件域：按 <cwd>/.pi/pi-chamber.json 启用的能力
+    │   │   │   │   ├── index.js        #     读配置 + 判 enabled + 工具名归属 + 激活收敛（加插件就改这里）
+    │   │   │   │   └── subagent.js     #     subagent 插件（孤岛：只收注入的建场/收工原语）
     │   │   │   └── messages.js         #   消息投影纯函数（首屏/实时/翻页三个消费者共用一套口径）
     │   │   └── nav-service.js  editor-service.js  stt-service.js  tts-service.js  term-service.js  # 其余五个 Service
     │   │                              # ↑ term-service.js 只做帧桥接（~190 行）：PTY 归 packages/termd，chamber 不碰 node-pty
     │   ├── data/              #   nav-state.json（导航位置现场，运行期产物）
-    │   ├── scripts/           #   smoke.js / agent-smoke.mjs / prompt-smoke.mjs / web-smoke.mjs / term-smoke.mjs / tts-smoke.mjs
+    │   ├── scripts/           #   smoke.js / agent-smoke.mjs / prompt-smoke.mjs / subagent-smoke.mjs / web-smoke.mjs / term-smoke.mjs / tts-smoke.mjs
     │   └── test/              #   bus.test.js + 真服务 e2e：bus-e2e(3998) editor-e2e(3997) fsops-e2e(3996)
     └── web/                   # @pi-chamber/web：React 19 + antd 6 + zustand + Vite
         ├── package.json
@@ -247,8 +253,8 @@ ws.onclose   = () => bus.detachTransport("ws closed");
 
 | 事件 | 类型 | 发出参数 | 返回参数 | 功能说明 |
 |-|-|-|-|-|
-| `agent.sessions.sync` | emit(s→w) | `{agents, selectedCwd, sessions}` | — | 名册全量：连接 / 换目录。`agents:[{cwd, basename, sessionCount}]`；`sessions:[{id, cwd, name, updateTime, messageCount, status}]`（只含 `selectedCwd` 这一个目录的场次） |
-| `agent.sessions.patch` | emit(s→w) | `{agents?, rows?}` | — | 名册增量：其余所有名册变化（**不分焦点**，后台出勤的灯/条数也要动）。`rows` 元素 `{id, cwd, status?, messageCount?, updateTime?, name?, deleted?}`；`agents` 按 cwd 合并 |
+| `agent.sessions.sync` | emit(s→w) | `{agents, selectedCwd, sessions}` | — | 名册全量：连接 / 换目录。`agents:[{cwd, basename, sessionCount}]`；`sessions:[{id, cwd, name, updateTime, messageCount, status, isSubAgent, parentId}]`（只含 `selectedCwd` 这一个目录的场次） |
+| `agent.sessions.patch` | emit(s→w) | `{agents?, rows?}` | — | 名册增量：其余所有名册变化（**不分焦点**，后台出勤的灯/条数也要动）。`rows` 元素 `{id, cwd, status?, messageCount?, updateTime?, name?, isSubAgent?, parentId?, deleted?}`；`agents` 按 cwd 合并 |
 | `agent.sessions.list` | emit(w→s) | `{cwd}` | — | 换目录（Agent 下拉）：服务端记下名册目录 `cwd` 并重推 sync；不动焦点，无失败路径 |
 | `agent.chat.sync` | emit(s→w) | `activeId / cwd / messages / before / commands / model / thinkingLevel / steers / info / status` 的任意子集 | — | 对话：**字段级替换**（帧里出现的字段就是该字段的完整真值；不出现 = 前端不动它）。带 `activeId` 的整组帧只出现在连接 / open（必带全量，含 messages） |
 | `agent.chat.message` | emit(s→w) | `{m, open?}` | — | 整条消息（**裸帧**，只发焦点）。`open:true` = 草稿；省略 = 终稿（整条替换那条草稿） |
@@ -303,9 +309,13 @@ ws.onclose   = () => bus.detachTransport("ws closed");
 ```js
 // 行（名册）—— status 五值全可能；chat 只用 idle/pending/running/compacting
 type Status  = "offline" | "idle" | "pending" | "running" | "compacting"
-type Session = { id, cwd, name, updateTime, messageCount, status }
+type Session = { id, cwd, name, updateTime, messageCount, status, isSubAgent, parentId }
                  // ★ 无 createTime（服务端从不发）：排序只用 updateTime
                  // name = sessionName || 首条用户消息 || ""（服务端合成）
+                 // isSubAgent/parentId = 本场是 subagent 工具派出来的（不是人手动开的）：
+                 //   isSubAgent 恒出现（boolean），唯一来源 = **档案头的 parentSession**（pi 官方字段）
+                 //     → 重连 / 换目录（sync 整组替换）/ chamber 重启 都不会丢，且零额外 IO
+                 //   parentId = 父的 sessionId（前端缩进用）；父是幽灵/已删时为 null（isSubAgent 仍 true）
 
 // 消息（chat.message.m 与 chat.sync.messages[] 同构；read 已删，不再有第二套形状）
 type Message = {
@@ -317,6 +327,11 @@ ts, text          // ISO / 摊平文本（纯文本渲染 + 朗读用）
 }
 // 角色附加：assistant → blocks/stopReason/model/usage/errorMessage；toolResult → toolCallId/toolName/isError
 //   bashExecution → command/exitCode/cancelled/truncated；custom → customType/display；*Summary → error:true（压缩失败）
+//   toolResult.subagent（**白名单**：只认 toolName==="subagent"）→ { childSessionId, status, usage }
+//     来源 = toolResult.details（SDK 原样落盘）。存在意义：① 工具卡片渲染「打开 →」② 重连/翻页后卡片不丢。
+//     失败状态看 `status`（"ok"|"error"|"aborted"|"timeout"）—— ★ **不能看 isError**：
+//     agent-loop 对「正常 return」的工具结果一律写 isError:false（只有 throw 才 true），
+//     而 throw 会把 details 换成 {} → 保 details 就保不住 isError，两者相权保 details。
 // blocks 元素：{ ci, type: "text"|"thinking"|"toolCall"|未知, text?|args?|raw?, id?, name?, redacted? }
 
 // info（chat.sync.info）
@@ -332,8 +347,27 @@ type Info = { input, output, cacheRead, cacheWrite, cost,        // = getSession
 - **内容流是裸帧**（`chat.message` / `chat.delta`）：不带 sessionId —— 只发 activeId 那一场（服务端焦点闸），单条 WS 严格有序。前端只认两条规则：**草稿不变式**（同一时刻最多一条草稿、且永远是最后一条）+ **delta 只进最后一条 open 草稿**（没有草稿就丢，绝不去改已完成的消息）。
 - **delta 攒批按事件数不按字符数**（中英 token 粒度差太多，按字切会把英文单词拦腰截断）：攒够 30 个 `*_delta` 事件发一条；块 `*_end` 零头照发、`message_end` 残余兜底；`message_start` 作废上一代零头；焦点变（activeId 变）整体清空。SDK 每个 `message_update` 都自带 `partial` 全量快照 → 丢在服务端不上线（流量大头）。
 - **草稿的两处补丁**：① 首屏 `chat.sync.messages` 末尾会挂一条 `open:true` 在途草稿（`state.streamingMessage` 不在 `state.messages` 里，不挂就干等 message_end）；② `toolcall_start` 的 name 可能是空串（OpenAI 系在 name 之前就 push 了 start）→ 允许后续 delta 补带。
-- **消息投影**（`agent-service/messages.js`，首屏/实时/翻页三个消费者共用一套，口径必须一致）：时间戳统一 ISO；`toolResult.text` 裁到前 50 字 + `truncated:true`（展开时走 `chat.toolResult` 要全文）；assistant 的 `blocks` 带 `ci`（= content[] 下标，实时 delta 按 ci 入格）。角色附加字段：assistant `stopReason/blocks/model/usage/errorMessage`；toolResult `toolCallId/toolName/isError`；bashExecution `command/exitCode/cancelled/truncated`；custom `customType/display`；usage 精简 `{input,output,cacheRead,cacheWrite,total,cost}`。压缩/分支摘要是独立档案 entry（`type:"compaction"/"branch_summary"`，文本在 `entry.summary`）→ 投影成 `compactionSummary`/`branchSummary` 角色。
+- **消息投影**（`agent-service/messages.js`，首屏/实时/翻页三个消费者共用一套，口径必须一致）：时间戳统一 ISO；`toolResult.text` 裁到前 50 字 + `truncated:true`（展开时走 `chat.toolResult` 要全文）；assistant 的 `blocks` 带 `ci`（= content[] 下标，实时 delta 按 ci 入格）。角色附加字段：assistant `stopReason/blocks/model/usage/errorMessage`；toolResult `toolCallId/toolName/isError/subagent`（`subagent` = 白名单投影：只认 `toolName==="subagent"`，从 `details` 里只挑 `childSessionId/status/usage` 三个字段 —— details 是各工具自留地，全透传会把线帧撑大）；bashExecution `command/exitCode/cancelled/truncated`；custom `customType/display`；usage 精简 `{input,output,cacheRead,cacheWrite,total,cost}`。压缩/分支摘要是独立档案 entry（`type:"compaction"/"branch_summary"`，文本在 `entry.summary`）→ 投影成 `compactionSummary`/`branchSummary` 角色。
 - **info 口径**：`info` = `getSessionStats()`（`tokens.*` + `cost`，**整场累计含被压缩掉的历史**）+ `getContextUsage()`（`contextTokens/contextPercent/contextWindow`；刚压缩完 tokens 为 `null` → 前端不显示）。
+- **插件域（`agent-service/plugins/`）**：chamber 内置的「**按 cwd 配置启用**的能力」——每个插件往 AgentSession 里注入一个工具。抽这一层是因为 subagent 之后还会有同类的（都是"给 agent 加一个能力，能不能用由目录决定"）。加新插件 = 写 `plugins/xxx.js` + 在 `plugins/index.js` 的 `PLUGINS` 加一行。
+  - **插件契约**（`plugins/xxx.js` 必须导出三个东西）：
+    ```js
+    export const key = "xxx";          // 配置键名（= pi-chamber.json 里那一段的名字）
+    export const toolNames = ["xxx"];  // 本插件占用的工具名（框架用它做"归属"，见下）
+    export function create(ctx) { … }  // → ToolDefinition | null（null = 本次不注入，如深度到顶）
+    ```
+    `ctx = { bus, cwd, depth, config, getSession, modelRuntime, spawnSession, closeChild }` ——
+    `config` = 该插件那一段（框架已确认键存在；**`enabled` 由框架判，插件不用管**）；
+    `getSession` = ★ **晚绑**取值器（建场时本场的 AgentSession 还没造出来，`execute` 时才读得到）；
+    `spawnSession` / `closeChild` = 注入的建场/收工原语（插件**不 import index.js**，避免循环依赖）。
+  - **配置**：`<cwd>/.pi/pi-chamber.json`（独立文件，**不**塞进 pi 的 `.pi/settings.json` —— pi 的 settings 是 global+project 两层深合并且 pi 自己会回写它，塞进去有被冲掉的风险）。随目录走 = 符合"一个 cwd = 一个 agent"。
+  - **缺省 `enabled = false`**：不给默认能力（派单要花钱，得你点头）+ 零迁移成本。
+  - **注册与激活是两件事**（这是热更的前提）：**注册**（工具存不存在）只在建场时定（`customTools` 只在构造时赋值，reload 改不了它）；**激活**（工具现在活不活）每次都可以重算（`setActiveToolsByName` 是公开 API，顺手重建系统提示词）。所以：**插件工具恒注册，`enabled` 只影响激活**。
+  - **工具名归属**：配置里**出现**了插件的键 = 你认领了 chamber 的能力 → 这个名字归 chamber 管（chamber 的 customTool 覆盖同名扩展工具；插件自己 decline 时用 `excludeTools` 把同名扩展一起挡掉）。配置里**没这个键** → chamber 完全不插手。不这么做的话，agent 目录里装个同名扩展就能绕过插件的闸。
+  - **生效时机**：**激活**能 `/reload` 热更（chamber 的 `/reload` 在 `session.reload()` 之后重读 `pi-chamber.json` 再收敛一次）；**注册**改不了，所以"配置从没这个键变成有这个键"需重开一次 Session（之后开关都是热的）。
+  - **为什么不用 InlineExtension 做热更**：`DefaultResourceLoader` 有 `extensionFactories`，而且它在 `resourceLoader.reload()` 里被重新执行 —— 看着是官方热更的路。但 `reload()` 走的是 `_buildRuntime({ includeAllExtensionTools: true })`，而 `_refreshToolRegistry` 会把**所有扩展工具全部激活** → 会把 `enabled: false` 顶掉。`customTools` 不受这条影响 → chamber 保持控制权。
+- **subagent 插件（`agent-service/plugins/subagent.js`）**：agent 调 `subagent` 工具 = chamber **自己建一个真 Session**（不是 spawn 子进程）—— 于是白捡：名册里看得见、能点开看实时流式、能 abort、能翻页、有独立档案、成本单算。配置段：`{ enabled, model, maxConcurrent, timeoutMs }`；`model` 缺省**跟父场一致**（用 `getSession()` 晚绑取值，因为建场时本场 session 还没造出来）。与 index.js 的边界：本文件**不 import index.js**，`spawnSession`/`closeChild`/`getSession` 全由 `attachSession` 注入。四条硬规矩：① **闸在插件层**（深度/并发写在插件里，不写 `spawnSession` —— 否则用户手动新建也占额度）；② **递归靠创建期掉**（`depth >= MAX_DEPTH` 直接返回 null，框架就不注册本工具 —— 用户明确要求 subagent 不能再调 subagent）；③ **失败一律 return、绝不 throw**（throw 会把 details 换成 `{}`，前端就拿不到 `childSessionId`；代价是 `isError` 拿不到 true → 真值放 `details.status`）；④ **给模型的 content 只要「成本头 + 结论」**，绝不给 transcript（那等于白派）。子场成本经 `AgentToolResult.usage` 回传 → `getSessionStats()` 累加 toolResult 的 usage → **父场的 info 帧自动包含 subagent 开销**。
+- **`spawnSession` / `focusSession`（建场与置焦拆开）**：`createSession` = 两者组合；`openSession` = 找/建运行时 + `focusSession`；subagent = **只 spawnSession**（不抢焦点、不动名册目录）。换目录时 **sync 必须在前、patch 必须在后**（幽灵不在盘上，sync 是整组替换会冲掉它）。
 - **prompt 语义**：空闲 = 起一轮（run）；running 期间输入自动走 SDK 插队（steer）—— 立即中断当前生成、等手头 toolCall 收尾再投递，被插的 run 不落定。忙闲唯一判据 = `AgentSession.isStreaming`（SDK 真值，服务端不另存状态）。被拒（压缩中/没模型）会吞掉这条文字 —— 已知并接受。
 - **命令分诊**：`promptSession` 最前面拦一道，命中 `BUILTINS`（`/model` `/name` `/level` `/compact` `/reload`）就地执行：**不起 run、不产生用户消息、不进 transcript**；未命中原样下传（扩展命令 / 模板 / skill 由 SDK 内部处理，未知命令当普通文本）。执行完（成功或失败）一律 `refreshFocus` 补推真值 + 命令清单（`/model` `/level` 改的是 SDK 内部状态，不进 `session.subscribe` 桥）；run **可返回 `{notice:{type,message}}`**，由分诊统一推 notice 帧（命令体保持不碰总线，文案自己拼）—— 目前只有 `/reload` 用（成功无独立帧，回执就靠它）。**命令一律不挡忙**（学 pi TUI：命令分支写在 `isStreaming` 之前）—— 忙时 `/compact` 会掐掉当前 run（已生成的那半截不丢，收成一条 `stopReason:"aborted"` 的消息），`/reload` 行为未定义；取舍已知并接受。
 - **压缩（B4）**：SDK 不走 message 流，只发 `compaction_*` → 复用「草稿 → 终稿」：start 插 `compactionSummary` 占位（open:true）、end 用 `result.summary` 替换（失败给 `errorMessage` + `error:true`，**不弹 notice**，错误写在那条折叠条里）。成败必到一次 end。顺序：手动 `/compact` = `settled` → `start` → `end`（`compact()` 首行 `await abort()`，其内 `waitForIdle` 卡到 settled 广播完）；自动阈值 = `start` → `end` → `settled`。

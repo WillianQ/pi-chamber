@@ -53,11 +53,51 @@ function byTimeDesc(a, b) {
   return x < y ? 1 : x > y ? -1 : 0;
 }
 
-/** 展示序（纯函数，页面唯一入口）：① 焦点那一行 ② 其余“活着”的（运行时在册，status ≠ offline）
- *  ③ 剩下的按最近动过（updateTime）新→旧。★ 名册协议里**没有 createTime**，别拿它排。 */
-export function sortRows(rows, activeId) {
-  const rank = (r) => (r.id === activeId ? 0 : r.status !== "offline" ? 1 : 2);
-  return [...rows].sort((a, b) => rank(a) - rank(b) || byTimeDesc(a.updateTime, b.updateTime));
+/** 展示序（纯函数，页面唯一入口）：**树形** —— subagent 挂在它的父行下面（缩进一级），
+ *  不参与顶层排序；顶层内部按最近动过（updateTime）新→旧。
+ *
+ *  为什么不再「焦点置顶」：置顶的后果是**点开哪个就把它弹到第一个** ——
+ *  而 subagent 是 agent 派出去的临时产物，不该跟人手动开的场次抢位置（实测很刺眼）。
+ *  现在：位置只由 updateTime 决定（稳定，点了不跳），焦点靠左边竖条 + 标题主色表达（本来就有）。
+ *
+ *  规则：
+ *    ① 顶层 = 没有父（或父不在本列表里）的场次；
+ *    ② 每个 subagent 挂在父下面，兄弟之间按 updateTime 新→旧；
+ *    ③ 递归（孙子挂儿子下面）—— v1 只有一层，但规则不设限；
+ *    ④ 父不在列表里（已删 / 不在本 cwd）→ 降级为顶层，**绝不静默吞行**。
+ *
+ *  ★ 返回的行多一个 `depth` 字段（0 = 顶层）：页面拿它做缩进，不必自己再推一遍树。
+ *  ★ 名册协议里**没有 createTime**，排序一律只用 updateTime。
+ */
+export function sortRows(rows) {
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  const childrenOf = new Map(); // parentId -> rows[]
+  const roots = [];
+  for (const r of rows) {
+    // 自指（脏数据）当无父处理，免得把自己挂到自己下面转不出来
+    const p = r.parentId && r.parentId !== r.id ? byId.get(r.parentId) : null;
+    if (p) {
+      const arr = childrenOf.get(p.id) ?? [];
+      arr.push(r);
+      childrenOf.set(p.id, arr);
+    } else {
+      roots.push(r);
+    }
+  }
+  roots.sort(byTimeDesc);
+  for (const arr of childrenOf.values()) arr.sort(byTimeDesc);
+
+  const out = [];
+  const seen = new Set();
+  const walk = (r, depth) => {
+    if (seen.has(r.id)) return; // 防环（父子互指）：第二遍走到就直接放回，不死循环
+    seen.add(r.id);
+    out.push({ ...r, depth });
+    for (const c of childrenOf.get(r.id) ?? []) walk(c, depth + 1);
+  };
+  for (const r of roots) walk(r, 0);
+  for (const r of rows) if (!seen.has(r.id)) walk(r, 0); // 兜底：环里的行也得上榜
+  return out;
 }
 
 /** agent 列表合并：按 cwd 覆盖 / 插入 */

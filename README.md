@@ -113,6 +113,42 @@ PTY 子进程挂在「谁起了它」的进程树下。若由 chamber 起 PTY，
 
 termd 只绑 `127.0.0.1:3002`，自带一套 40 行线协议（**不走 bus**），三层鉴权见下文安全节。
 
+### 3. 插件机制 —— 能力由目录决定，开关能热更
+
+chamber 内置的能力（目前是 **subagent**：让 agent 把一件自足的任务派给一份新的独立 Session）不是写死的，而是**按 cwd 配置启用** —— 这跟「一个 cwd 目录 = 一个 Agent Space」是同一条原则：**agent 的能力，应该由目录自己说了算**。
+
+配置写在 `<cwd>/.pi/pi-chamber.json`：
+
+```json
+{
+  "subagent": {
+    "enabled": true,
+    "model": "ds/deepseek-flash",
+    "maxConcurrent": 4,
+    "timeoutMs": 360000
+  }
+}
+```
+
+**缺省 `enabled = false`** —— 不写配置就没有这个能力。两个理由：派单是要花钱的，得你点头；以及零迁移成本（已有目录一个都不用动）。
+
+几个关键取舍：
+
+- **独立文件，不塞进 pi 的 `.pi/settings.json`** —— 那是 global + project 两层深合并、而且 pi 自己会回写它，chamber 往里塞自定义键有被冲掉的风险。
+- **「注册」和「激活」拆成两件事** —— 注册（这个工具存不存在）只在建场那一刻定；激活（它现在活不活）每次都能重算。所以插件工具**恒注册**，`enabled` 只决定激活 → **`/reload` 就能热更开关，不用重开会话**（系统提示词也跟着重建）。
+  > 唯一改不了的：配置从「没这个键」变成「有这个键」—— 注册表里还没有它，得重开一次 Session。之后开关都是热的。
+- **工具名归 chamber 管** —— 配置里一旦出现某个插件的键，它占用的工具名就归 chamber 管（盖掉 agent 目录里的同名扩展）。否则装个同名扩展就能绕过插件自己的闸（subagent 的递归闸就靠这个兜住）。
+
+加新插件 = 写一个 `plugins/xxx.js` + 在插件表里加一行：
+
+```js
+export const key = "xxx";          // 配置键名（= pi-chamber.json 里那一段的名字）
+export const toolNames = ["xxx"];  // 本插件占用的工具名
+export function create(ctx) { … }  // → ToolDefinition | null（null = 本次不注入，如深度到顶）
+```
+
+> 完整的契约、`ctx` 字段与所有取舍，见 [`AGENTS.md`](./AGENTS.md) 第 4 章。
+
 ## 协议速览
 
 HTTP：
@@ -147,6 +183,7 @@ pnpm test           # node --test（自起 3996~3999 独立实例，不碰 3000/
 pnpm smoke          # 活体服务全链路体检
 pnpm agent-smoke    # Agent 域名册 / 生命周期冒烟
 pnpm prompt-smoke   # prompt 全流程（真实模型往返 + 帧语义断言）
+pnpm subagent-smoke # subagent 域（真调模型：默认关 / 全链路 / /reload 热更）
 pnpm web-smoke      # 前端 store 冒烟（Node 里跑真前端代码消费活体帧）
 pnpm termd-smoke    # 终端域冒烟（直连 termd）
 pnpm term-smoke     # 终端域冒烟（走 chamber 全链路）

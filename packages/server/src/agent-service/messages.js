@@ -119,6 +119,18 @@ function rowOfMessage(m) {
       row.toolCallId = m.toolCallId ?? "";
       row.toolName = m.toolName;
       row.isError = m.isError;
+      // subagent 的指针（白名单：只认 chamber 自己的 subagent 工具）。
+      // 为什么不透传整个 details：details 是各工具的自留地（read/edit 塞文件清单、edit 塞 diff），
+      // 全透传会把线帧撑大；这里只挑前端真用得上的三个字段。
+      // 存在意义：① 工具卡片能渲染「打开 →」；② 档案里带着它 → 重连/翻页后卡片不丢。
+      const sc = m.toolName === "subagent" ? m.details : null;
+      if (sc?.childSessionId) {
+        row.subagent = {
+          childSessionId: sc.childSessionId,
+          status: sc.status ?? null,
+          usage: sc.usage ?? null,
+        };
+      }
       break;
     }
     case "bashExecution":

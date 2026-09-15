@@ -3,7 +3,7 @@ import { CopyOutlined, SoundOutlined } from "@ant-design/icons";
 import MarkdownRenderer from "../../components/MarkdownRenderer.jsx";
 import CollapseCard from "../../components/CollapseCard.jsx";
 import { T } from "../../theme/tokens.js";
-import { chatActions, useTTSStore } from "../../stores";
+import { chatActions, sessionsActions, useTTSStore } from "../../stores";
 
 // 单条消息 = 一行"记账式"记录（无气泡）：角色标签行 + 正文平铺。
 // 全角色与档案 1:1；渲染层按 role 选样式，未知 role 走兜底不崩。
@@ -125,6 +125,44 @@ function ToolResultBody({ result }) {
   return <pre style={preStyle}>{result?.text || "（空结果）"}</pre>;
 }
 
+/** subagent 工具的额外入口：它派出去的是一份**真出勤**（独立档案、独立上下文），
+ *  这里给一个跳过去看它完整对话的钮 —— 子 Session 本身就在名册里，点了就置焦。
+ *  childSessionId 来自 toolResult.details（服务端 messages.js 白名单投影）。 */
+const SUB_STATUS = { ok: "已完成", error: "失败", aborted: "已中止", timeout: "超时" };
+function SubagentLink({ sub }) {
+  const cost = sub.usage?.cost;
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "6px 0", flexWrap: "wrap" }}>
+      <button
+        onClick={() => sessionsActions.openSession(sub.childSessionId)}
+        title="跳到这份子 Session，看它的完整对话与工具调用"
+        style={{
+          background: T.color.toolRowBg,
+          border: `1px solid ${T.color.dashedDivider}`,
+          borderRadius: T.radius.base,
+          color: T.color.tool,
+          cursor: "pointer",
+          fontFamily: T.fontFamily.mono,
+          fontSize: T.fontSize.xs,
+          padding: "3px 8px",
+        }}
+      >
+        ↳ 打开子 Session → {sub.childSessionId.slice(0, 8)}
+      </button>
+      {SUB_STATUS[sub.status] && (
+        <span style={{ fontFamily: T.fontFamily.mono, fontSize: T.fontSize.xs, color: T.color.textMuted }}>
+          {SUB_STATUS[sub.status]}
+        </span>
+      )}
+      {typeof cost === "number" && cost > 0 && (
+        <span style={{ fontFamily: T.fontFamily.mono, fontSize: T.fontSize.xs, color: T.color.textMuted }}>
+          ${cost.toFixed(4)}
+        </span>
+      )}
+    </div>
+  );
+}
+
 /** assistant 的小框列表：text → markdown；thinking / toolCall → CollapseCard 小卡片；未知块兜底 */
 function BlockItem({ b, streaming, result }) {
   if (b.type === "text") {
@@ -159,9 +197,14 @@ function BlockItem({ b, streaming, result }) {
   if (b.type === "toolCall") {
     // 绿=正常 / 红=出错（背景跟着结果状态翻转）；结果按 toolCallId 配进卡片内嵌，收起态标题也有 ✓/✗/⏳
     const state = !result ? " · ⏳" : result.isError ? " · ✗ 失败" : " · ✓";
+    const sub = result?.subagent; // subagent 工具：多一个「跳去看那份子 Session」的入口
     return (
-      <CollapseCard tone={result?.isError ? "error" : "ok"} header={`⚙ Tool · ${b.name || "(未知工具)"}${state}`}>
+      <CollapseCard
+        tone={result?.isError ? "error" : "ok"}
+        header={`⚙ Tool · ${b.name || "(未知工具)"}${state}${sub ? " · 子 Session" : ""}`}
+      >
         <pre style={preStyle}>{b.args}</pre>
+        {sub?.childSessionId && <SubagentLink sub={sub} />}
         {result ? (
           <>
             <div style={{ borderTop: `1px dashed ${T.color.dashedDivider}`, margin: "8px 0 6px" }} />

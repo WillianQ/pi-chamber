@@ -2,7 +2,7 @@
 // / 命令域：内置命令表 + 四源清单（内置 / 扩展 / prompt 模板 / skill）+ 二级参数池。
 //
 // ★ 本文件是**闭合孤岛**：不吃 sessions 表、不读 watched、不摸 bus。
-//   只吃传进来的 entry（仅碰 entry.agentSession / entry.commandsPromise），返回纯数据
+//   只吃传进来的 entry（仅碰 entry.agentSession / entry.commandsPromise / entry.reapplyPlugins），返回纯数据
 //   （命令节点数组；run 可另返回 { notice:{type,message} } —— 文案由本文件拼，推帧交给 index.js 的分诊，
 //     本文件依旧不碰总线）。
 //   要外推的 commandsOfSafe 留在 index.js（它要读焦点），prompt 分诊用的 builtinOf 也留在 index.js，
@@ -30,7 +30,7 @@
 /** /reload 回执：一句话说清「重载了什么（带名字）+ 几处问题」。notice 只带 message，前端不解析、原样展示。
  *  ★ 必须读 reload **之后**的对象：resourceLoader / extensionRunner 是 getter，reload 会把它们整个换掉。
  *  ★ reload() 本身不抛错：坏扩展 / 重名冲突全进 diagnostics（不报 = 静默烂掉），所以这里必须自己扫一遍。 */
-function reloadSummary(e) {
+function reloadSummary(e, plug) {
   const rl = e.agentSession.resourceLoader;
   const ext = rl.getExtensions(); // { extensions, errors }
   const groups = [
@@ -47,7 +47,16 @@ function reloadSummary(e) {
     ...rl.getPrompts().diagnostics.map((d) => d.message),
     ...e.agentSession.extensionRunner.getCommandDiagnostics().map((d) => d.message),
   ];
-  return issues.length ? `${head}｜⚠ ${issues.length} 处问题：${issues[0]}` : head;
+  return head + plugNote(plug) + (issues.length ? `｜⚠ ${issues.length} 处问题：${issues[0]}` : "");
+}
+
+/** 插件开关的回执尾：说清“谁开着”，以及“要不要重开会话才生效”。
+ *  ★ 两种状态要分开说：**激活**能 /reload 热更；**注册**（配置里新认领的插件）得重开。 */
+function plugNote(plug) {
+  if (!plug) return "";
+  const on = (plug.active ?? []).join("、") || "（无）";
+  const reopen = plug.needReopen ?? [];
+  return `｜插件已开：${on}` + (reopen.length ? `｜⚠ ${reopen.join("、")} 需重开 Session（新建场时配置里还没它）` : "");
 }
 
 /** 扩展名：取文件名去掉扩展后缀（全路径太长，Alert 一行放不下；两名重了看诊断里的全路径） */
@@ -86,12 +95,14 @@ const BUILTINS = {
     run: async (e, a) => { await e.agentSession.compact(a.trim() || undefined); },
   },
   reload: {
-    description: "重新加载扩展 / skills / prompts / 设置",
+    description: "重新加载扩展 / skills / prompts / 设置（含 .pi/pi-chamber.json 的插件开关）",
     run: async (e) => {
       await e.agentSession.reload();
       e.commandsPromise = null; // ★ 扩展/skill/模板全变了 → 清单缓存作废，下一个 pushFocus 重建
+      // 插件开关：reload 会重建工具注册表（且把**扩展**工具全激活），这里重读 pi-chamber.json 再收敛一次
+      const plug = await e.reapplyPlugins?.();
       // 成功无独立帧：靠 notice 回执（分诊统一推）+ 分诊 finally 的 refreshFocus 重推命令清单
-      return { notice: { type: "reload", message: reloadSummary(e) } };
+      return { notice: { type: "reload", message: reloadSummary(e, plug) } };
     },
   },
 };

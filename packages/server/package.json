@@ -11,6 +11,7 @@
     "smoke": "node scripts/smoke.js",
     "agent-smoke": "node scripts/agent-smoke.mjs",
     "prompt-smoke": "node scripts/prompt-smoke.mjs",
+    "subagent-smoke": "node scripts/subagent-smoke.mjs",
     "web-smoke": "node scripts/web-smoke.mjs",
     "term-smoke": "node scripts/term-smoke.mjs",
     "tts-smoke": "node scripts/tts-smoke.mjs"
@@ -24,6 +25,7 @@
     "express": "^5.2.1",
     "ignore": "^7.0.9",
     "jsonwebtoken": "^9.0.3",
+    "typebox": "^1.3.7",
     "ws": "^8.21.3"
   },
   "devDependencies": {

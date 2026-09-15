@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Alert, Button, Flex, Popconfirm, Select, Space, Typography } from "antd";
+import { Alert, Button, Flex, Popconfirm, Select, Space, Tooltip, Typography } from "antd";
 import { CloseOutlined, DeleteOutlined, FolderOpenOutlined, PlusOutlined } from "@ant-design/icons";
 import { T } from "../../theme/tokens.js";
 import { useChatStore, useSessionsStore, sessionsActions, sortRows } from "../../stores/index.js";
@@ -82,6 +82,28 @@ const sessionTitle = (s) => {
   return shortId(s.id);
 };
 
+/** subagent 标记：这一场是别人派出来的（不是人手动开的）。
+ *  isSubAgent 来自服务端 —— 它读的是**档案头里的 parentSession**，所以重启/重连/换目录都不会丢。
+ *  parentId 可能为 null（派它的那一场是幽灵或已被删），那种情况下只标“派自？”不崩。 */
+function SubAgentMark({ row }) {
+  if (!row.isSubAgent) return null;
+  return (
+    <Tooltip title={row.parentId ? `subagent · 派自 ${shortId(row.parentId)}` : "subagent（派它的那一场已不在）"}>
+      <span
+        style={{
+          flex: "0 0 auto",
+          color: T.color.tool,
+          fontFamily: T.fontFamily.mono,
+          fontSize: T.fontSize.sm,
+          lineHeight: T.lineHeight.base,
+        }}
+      >
+        ↳
+      </span>
+    </Tooltip>
+  );
+}
+
 /** 状态灯：服务端 status 五值（pending 本地在途 / running 跑 / compacting 压缩 / idle 待机 / offline 只有档案） */
 const LAMP = {
   pending: T.color.lampBoot,
@@ -125,7 +147,9 @@ function SessionRow({ row, isActive, hovered, setHoverId }) {
         alignItems: "center",
         gap: 8,
         // 老 chamber 扁平行：发丝分隔线 + 焦点左竖条，不画圆角框（根治"一筐一筐"）
+        // 缩进 = 树的层级（depth 由 sortRows 给）：subagent 往里缩一级，一眼看出是谁派的
         padding: "10px 12px",
+        paddingLeft: 12 + (row.depth ?? 0) * 14,
         borderBottom: `1px solid ${T.color.hairline}`,
         borderLeft: `2px solid ${isActive ? T.color.primary : "transparent"}`,
         background: isActive
@@ -140,15 +164,18 @@ function SessionRow({ row, isActive, hovered, setHoverId }) {
       <div style={{ flex: 1, minWidth: 0 }}>
         <div
           style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
             fontSize: T.fontSize.sm, // 标题 = 正文档 14
             lineHeight: T.lineHeight.base,
             color: isActive ? T.color.primary : undefined, // 焦点行标题染主色蓝（与左竖条同色，不加粗）
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
           }}
         >
-          {sessionTitle(row)}
+          <SubAgentMark row={row} />
+          <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {sessionTitle(row)}
+          </span>
         </div>
         <div
           style={{
@@ -221,8 +248,8 @@ export default function SessionsPage() {
   const info = useChatStore((s) => s.info);
   const [hoverId, setHoverId] = useState(null); // 只有 hover 行显示操作区
   const [pickOpen, setPickOpen] = useState(false); // DirPicker 弹窗
-  // 展示序：焦点 → 活着 → 其余按最近动过（updateTime）新到旧（规则细节在 sessions-store.js 的 sortRows）
-  const rows = useMemo(() => sortRows(sessions, activeId), [sessions, activeId]);
+  // 展示序：树形 —— 顶层按最近动过新→旧，subagent 挂在父行下面（规则细节在 sessions-store.js 的 sortRows）
+  const rows = useMemo(() => sortRows(sessions), [sessions]);
   // 焦点行照旧留在列表里（不剔除）；头部只是把“你现在在哪一场”说清楚
   const activeRow = rows.find((r) => r.id === activeId) ?? null;
   // 名字：名册行里有就用它（同目录）；焦点属于别的目录→名册里没这行，退化成短码
