@@ -821,31 +821,76 @@ async function createSession(cwdArg, bus) {
   }
 }
 
-/** 销毁：释放运行时（在册时）+ 删档案（永久） */
+/** 派单树的子孙：沿档案头的 parentSession 往下逐层找（子场还能再派子场 —— 今天深度只到 1，
+ *  但这里不写死层数：规矩是"父没了，它派出去的都不该留"）。
+ *  @param rootPath 根的档案路径；@param infos SessionManager.listAll() 的结果
+ *  @returns SessionInfo[]（先子后孙） */
+function descendantsOf(rootPath, infos) {
+  const seen = new Set([foldPath(rootPath)]);
+  const out = [];
+  let frontier = [...seen];
+  while (frontier.length) {
+    const next = [];
+    for (const info of infos) {
+      if (!info.parentSessionPath || seen.has(foldPath(info.path))) continue;
+      if (!frontier.includes(foldPath(info.parentSessionPath))) continue;
+      seen.add(foldPath(info.path));
+      out.push(info);
+      next.push(foldPath(info.path));
+    }
+    frontier = next;
+  }
+  return out;
+}
+
+/** 销毁**一份**出勤：释放运行时（在册时）+ 删档案（永久）。返回是否删干净（档案删不掉时 false）。
+ *  ★ 只管这一份，不管派单树（连带删在 deleteSession 里编排）。 */
+async function destroyOne(bus, { id, path }) {
+  const entry = sessions.get(id);
+  const wasFocal = activeId === id;
+  if (entry) {
+    takeSession(id);
+    entry.agentSession.dispose();
+  }
+  if (path) {
+    try {
+      await unlinkSessionFile(path, id);
+    } catch (err) {
+      notice(bus, { sessionId: id, type: "error", message: String(err?.message ?? err) });
+      patchRows(bus, [{ id, status: "offline" }]); // 档案还在：真值帧照推（清 pending）
+      return false;
+    }
+  }
+  if (wasFocal) await pushChatFull(bus); // 删的是焦点 → 前端整组清空
+  clearPluginState(bus, id); // 这场没了 → 前端删插件状态条目
+  return true;
+}
+
+/** 销毁：释放运行时（在册时）+ 删档案（永久）。
+ *  ★ **连带它派出去的子场**（沿档案头 parentSession 往下，子孙一起删）：父没了，那几行既点不出
+ *    意义、也再没人管（父的 parentId 解析不出来），留着纯噪音。
+ *  ★ 先子后父：父是根，删完再推一次名册（agents 计数只推一帧）。 */
 async function deleteSession(sessionId, bus) {
   const key = String(sessionId ?? "").trim();
   if (!key) return;
+  const infos = await SessionManager.listAll();
+  const info = infos.find((s) => s.id === key);
   const entry = sessions.get(key);
-  const wasFocal = activeId === key;
-  if (entry) {
-    takeSession(key);
-    entry.agentSession.dispose();
+  if (!entry && !info) {
+    notice(bus, { sessionId: key, type: "error", message: `Session 不存在: ${key}` });
+    return;
   }
-  const info = (await SessionManager.listAll()).find((s) => s.id === key);
-  if (info) {
-    try {
-      await unlinkSessionFile(info.path, key);
-    } catch (err) {
-      notice(bus, { sessionId: key, type: "error", message: String(err?.message ?? err) });
-      patchRows(bus, [{ id: key, status: "offline" }]); // 档案还在：真值帧照推（清 pending）
-      return;
-    }
+  // 父的档案路径：幽灵（还没落盘）时读运行时的 sessionFile —— 子场档案头里记的就是这个
+  const rootPath = info?.path ?? entry?.agentSession?.sessionFile ?? null;
+  const kids = rootPath ? descendantsOf(rootPath, infos) : [];
+  const deleted = [];
+  for (const t of [...kids, { id: key, path: info?.path ?? null }]) {
+    if (await destroyOne(bus, t)) deleted.push(t.id);
   }
-  if (wasFocal) await pushChatFull(bus);
-  clearPluginState(bus, key); // 这场没了 → 前端删插件状态条目
-  patchRows(bus, [{ id: key, deleted: true }], await agentsSnapshot());
-  if (!entry && !info) notice(bus, { sessionId: key, type: "error", message: `Session 不存在: ${key}` });
-  console.log(`[agent] Session ${key} 已销毁（${info ? "运行时 + 档案" : "幽灵，无档案"}）`);
+  patchRows(bus, deleted.map((id) => ({ id, deleted: true })), await agentsSnapshot());
+  console.log(
+    `[agent] Session ${key} 已销毁（${info ? "运行时 + 档案" : "幽灵，无档案"}${kids.length ? `；连带子场 ${kids.length} 个` : ""}）`
+  );
 }
 
 // ───────────────────────── 呆滞清理：后台定时收工 ─────────────────────────
