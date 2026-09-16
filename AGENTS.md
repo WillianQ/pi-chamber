@@ -140,7 +140,8 @@ pi-chamber/
 ├── pnpm-lock.yaml
 ├── build/                     # ★ 打包产物（**整个目录 gitignore**）：gen/ 生成物 · out/ 中间件 · dist/pi-chamber.exe
 ├── scripts/bg.mjs             # 后台启停控制器：detached 起 `node src/server.js`（端口取自设置文件，强制注入），
-│                              #   pid 落 logs/bg.pid（gitignored）；根目录 bg-start.bat / bg-stop.bat / bg-status.bat 是双击入口
+│                              #   pid 落 logs/bg.pid（gitignored）。跑的是**当前源码**（不用重新打包），
+│                              #   与 build/dist/pi-chamber.exe（快照）各管一边
 ├── scripts/build-exe.mjs      # ★ 打包脚本：前端 vite → 收集资产 → rolldown 打后端单文件 → Node SEA 合成 exe → 换图标
 ├── scripts/sea-entry.mjs      # ★ exe 入口：一个 exe 两角色（chamber / --termd）+ 首次运行解压资产
 ├── logs/                      # ★ 所有运行期日志集中于此（gitignored）：

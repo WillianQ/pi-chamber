@@ -271,7 +271,7 @@ function ServicePage({ setting }) {
         showIcon
         style={{ marginTop: 12 }}
         message="端口改动需重启后端才生效"
-        description="保存后请手动重启 pi-chamber（或重新运行 bg-start.bat）"
+        description="保存后请手动重启 pi-chamber（关掉再重新打开）"
       />
     </>
   );

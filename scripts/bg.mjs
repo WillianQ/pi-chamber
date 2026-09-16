@@ -2,8 +2,7 @@
 /**
  * bg.mjs —— 后台启停后端（关掉命令行也照样跑）
  *
- * 用法：node scripts/bg.mjs <start|stop|status|restart>
- *       或双击根目录的 bg-start.bat / bg-stop.bat / bg-status.bat
+ * 用法：node scripts/bg.mjs <start|stop|status|restart>   （即 `pnpm bg start|stop|status|restart`）
  *
  * 原理：spawn 时带上 detached:true —— Windows 下子进程拿到 DETACHED_PROCESS 标志，
  *       不挂在本终端上；所以关 CMD / 关 VS Code 都不会把它带走。
