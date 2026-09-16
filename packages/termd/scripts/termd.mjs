@@ -12,13 +12,14 @@
  * 守护进程执行清场逻辑 —— 它手里的那批 PTY 在 Windows 上**不会**被连带收掉，直接变孤儿。
  * 所以：先请它自己杀光 PTY 再退；超时没退才硬杀（硬杀前也先试整棵进程树）。
  */
+import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
 import { DEFAULT_PORT, ensureTermdRunning, health, requestShutdown } from "../src/spawn.js";
 
-const PKG_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const LOG_FILE = path.join(PKG_DIR, "logs", "termd.log");
+// 家目录口径与 spawn.js / daemon.js 一致（token 与日志都落这儿 —— 别报一个不存在的路径）
+const HOME = process.env.PI_CHAMBER_HOME || path.join(os.homedir(), ".pi", "pi-chamber");
+const LOG_FILE = path.join(HOME, "logs", "termd.log");
 
 // 端口：`--port N` > 默认 3002（本文件不读 env —— 与 daemon/spawn 口径一致）
 const PORT = (() => {

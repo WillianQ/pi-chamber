@@ -8,22 +8,25 @@
 // token 落在 data/token 一行 → 不需要「pid/port/token 三字段 json」。
 // 单实例闸在 daemon 侧（listen 撞 EADDRINUSE 即退出），这边只管探活与拉起。
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const PKG_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const ROOT = path.resolve(PKG_DIR, "../..");
 const DAEMON_JS = path.join(PKG_DIR, "src", "daemon.js");
-// ★ 打包成 exe 后 import.meta.url 指向 exe 自己 → 上面那些相对路径全会算错，
-//   而且 daemon.js 根本不在磁盘上（它在 exe 里）。打包版由入口注入 PI_CHAMBER_HOME，
-//   拉起方式改成「exe 自己再起一份，带 --termd」（见 scripts/sea-entry.mjs）。
-const SEA = Boolean(process.env.PI_CHAMBER_HOME);
+// 家目录：与 setting.js / logger.js / nav-service.js 同一套口径（dev 与打包版**落到同一处**）
+//   → token / 日志天然共用一份：谁先起谁当 daemon，另一个连上去，不再各写各的 token。
+const HOME = process.env.PI_CHAMBER_HOME || path.join(os.homedir(), ".pi", "pi-chamber");
+// ★ 打包判据 = 「我是不是跑在 exe 里」：exe 里 import.meta.url 指向 exe 自己（不以 .js 结尾），
+//   而且 daemon.js 根本不在磁盘上 → 拉起方式要改成「exe 自己再起一份，带 --termd」
+//   （见 scripts/sea-entry.mjs）。
+//   ★ 绝不能用 PI_CHAMBER_HOME 判：exe 会把这个变量注入给子进程，从 chamber 内嵌终端里跑 dev
+//     代码会被误判成打包版，去读打包版的 token（真踩过：`pnpm termd status` 一直报"没响应"）。
+const SEA = !fileURLToPath(import.meta.url).endsWith(".js");
 // 日志与 chamber 的 server.log 同一处（找日志只需看一个目录）
-const LOG_DIR = SEA ? path.join(process.env.PI_CHAMBER_HOME, "logs") : path.join(ROOT, "logs");
-const TOKEN_FILE = SEA
-  ? path.join(process.env.PI_CHAMBER_HOME, "data", "token")
-  : path.join(PKG_DIR, "data", "token");
+const LOG_DIR = path.join(HOME, "logs");
+const TOKEN_FILE = path.join(HOME, "data", "token");
 
 export const DEFAULT_PORT = 3002;
 export const DAEMON_PATH = DAEMON_JS;
