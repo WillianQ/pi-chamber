@@ -26,6 +26,7 @@
 //   事件 fs.rename {path, newName}        同目录换名（目标冲突跳过；纯换大小写放行）
 //   事件 fs.delete {path}                 永久删除（目录连子项递归；回收站不做，已拍板）
 //   事件 fs.move   {path, toDir}          移入目录（同名冲突/移进自己子孙/跨盘 跳过）
+import { log } from "./log.js";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -291,7 +292,7 @@ function saveState() {
     fsSync.mkdirSync(path.dirname(STATE_FILE), { recursive: true });
     fsSync.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2), "utf-8");
   } catch (err) {
-    console.log(`[nav] 落盘失败: ${err?.message}`);
+    log(`[nav] 落盘失败: ${err?.message}`);
   }
 }
 
@@ -328,11 +329,11 @@ async function switchWatcher(bus) {
       handleWatchEvent(bus, String(filename));
     });
     watcher.on("error", (err) => {
-      console.log(`[nav] watch ${state.current} 出错: ${err?.message}`);
+      log(`[nav] watch ${state.current} 出错: ${err?.message}`);
       closeWatcher(); // 目录可能被删/盘符被拔：下次 nav.state 自愈后会重挂
     });
   } catch (err) {
-    console.log(`[nav] watch ${state.current} 挂载失败: ${err?.message}`);
+    log(`[nav] watch ${state.current} 挂载失败: ${err?.message}`);
   }
 }
 
@@ -408,17 +409,17 @@ export function installNavService(bus) {
     if (!parent || badName(name) || name.startsWith(".")) return; // 隐身文件建出来列表不可见，拒
     const target = path.join(parent, name);
     if (await existsAny(target)) {
-      console.log(`[fs] create 跳过（已存在不覆盖）: ${target}`);
+      log(`[fs] create 跳过（已存在不覆盖）: ${target}`);
       return;
     }
     try {
       if (p.dir) await fs.mkdir(target, { recursive: true });
       else await fs.writeFile(target, "", "utf-8");
-      console.log(`[fs] create ${p.dir ? "dir" : "file"}: ${target}`);
+      log(`[fs] create ${p.dir ? "dir" : "file"}: ${target}`);
       invalidateIndex();
       await pushState(bus);
     } catch (err) {
-      console.log(`[fs] create 失败 ${target}: ${err?.message}`);
+      log(`[fs] create 失败 ${target}: ${err?.message}`);
     }
   });
 
@@ -430,21 +431,21 @@ export function installNavService(bus) {
     const to = path.join(path.dirname(from), newName);
     // 纯换大小写（normKey 相等但字面不同）放行；其余同名冲突拒
     if (normKey(to) !== normKey(from) && (await existsAny(to))) {
-      console.log(`[fs] rename 跳过（目标已存在）: ${to}`);
+      log(`[fs] rename 跳过（目标已存在）: ${to}`);
       return;
     }
     if (normKey(to) === normKey(from) && to === from) return; // 没改名
     if (isProtected(from) || isProtected(to)) {
-      console.log(`[fs] rename 拒绝（受保护目录本体）: ${from}`);
+      log(`[fs] rename 拒绝（受保护目录本体）: ${from}`);
       return;
     }
     try {
       await fs.rename(from, to);
-      console.log(`[fs] rename: ${from} → ${to}`);
+      log(`[fs] rename: ${from} → ${to}`);
       invalidateIndex();
       await pushState(bus);
     } catch (err) {
-      console.log(`[fs] rename 失败 ${from}: ${err?.message}`);
+      log(`[fs] rename 失败 ${from}: ${err?.message}`);
     }
   });
 
@@ -452,16 +453,16 @@ export function installNavService(bus) {
     const target = p?.path ? path.resolve(String(p.path)) : "";
     if (!target || !(await existsAny(target))) return;
     if (isRootLike(target) || isProtected(target)) {
-      console.log(`[fs] delete 拒绝（根/受保护目录）: ${target}`);
+      log(`[fs] delete 拒绝（根/受保护目录）: ${target}`);
       return;
     }
     try {
       await fs.rm(target, { recursive: true, force: false, maxRetries: 2 }); // 永久删除、递归，已拍板
-      console.log(`[fs] delete: ${target}`);
+      log(`[fs] delete: ${target}`);
       invalidateIndex();
       await pushState(bus);
     } catch (err) {
-      console.log(`[fs] delete 失败 ${target}: ${err?.message}`);
+      log(`[fs] delete 失败 ${target}: ${err?.message}`);
     }
   });
 
@@ -470,33 +471,33 @@ export function installNavService(bus) {
     const toDir = p?.toDir ? path.resolve(String(p.toDir)) : "";
     if (!from || !toDir || !(await existsAny(from))) return;
     if (!(await isDir(toDir))) {
-      console.log(`[fs] move 跳过（目标不是目录）: ${toDir}`);
+      log(`[fs] move 跳过（目标不是目录）: ${toDir}`);
       return;
     }
     if (isRootLike(from) || isProtected(from)) {
-      console.log(`[fs] move 拒绝（根/受保护目录）: ${from}`);
+      log(`[fs] move 拒绝（根/受保护目录）: ${from}`);
       return;
     }
     const fromKey = normKey(from);
     const toKey = normKey(toDir);
     if (toKey === fromKey || toKey.startsWith(fromKey + path.sep.toLowerCase())) {
-      console.log(`[fs] move 拒绝（目录移进自己/自己的子孙）: ${from} → ${toDir}`);
+      log(`[fs] move 拒绝（目录移进自己/自己的子孙）: ${from} → ${toDir}`);
       return;
     }
     const to = path.join(toDir, path.basename(from));
     if (normKey(to) === fromKey) return; // 同目录原地，无意义
     if (await nameClash(toDir, path.basename(from))) {
-      console.log(`[fs] move 跳过（目标目录已有同名）: ${to}`);
+      log(`[fs] move 跳过（目标目录已有同名）: ${to}`);
       return;
     }
     try {
       await fs.rename(from, to);
-      console.log(`[fs] move: ${from} → ${to}`);
+      log(`[fs] move: ${from} → ${to}`);
       invalidateIndex();
       await pushState(bus);
     } catch (err) {
       // 跨盘 = EXDEV：v1 不做 copy+delete 兜底（已拍板报错跳过）
-      console.log(`[fs] move 失败${err?.code === "EXDEV" ? "（跨盘不支持，请复制后新建）" : ""} ${from}: ${err?.message}`);
+      log(`[fs] move 失败${err?.code === "EXDEV" ? "（跨盘不支持，请复制后新建）" : ""} ${from}: ${err?.message}`);
     }
   });
 
@@ -539,5 +540,5 @@ export function installNavService(bus) {
     await pushState(bus);
   });
 
-  console.log("[nav] 目录导航 + FS 操作服务已装（state 持久于 data/nav-state.json）");
+  log("[nav] 目录导航 + FS 操作服务已装（state 持久于 data/nav-state.json）");
 }

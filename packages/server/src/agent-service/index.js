@@ -42,6 +42,7 @@
 // SDK 缺口记录（沿用上一版）：SessionManager（v0.84.4 含上游 main）无档案删除公共 API →
 //   自己 unlink，白名单收敛在 unlinkSessionFile（只认 <agentDir>/sessions 内的 .jsonl）。
 
+import { log, logErr } from "../log.js";
 import { basename, join, resolve, sep } from "node:path";
 import { unlink } from "node:fs/promises";
 import {
@@ -181,7 +182,7 @@ function infoOf(entry) {
       contextWindow: ctx?.contextWindow ?? 0,
     };
   } catch (err) {
-    console.error(`[agent] info 读取失败: ${err?.message ?? err}`);
+    logErr(`[agent] info 读取失败: ${err?.message ?? err}`);
     return null;
   }
 }
@@ -294,7 +295,7 @@ function cursorOf(entry) {
   try {
     return entry.sm.buildContextEntries()?.[0]?.parentId ?? null;
   } catch (err) {
-    console.error(`[agent] 游标计算失败 ${entry.cwd}: ${err?.message ?? err}`);
+    logErr(`[agent] 游标计算失败 ${entry.cwd}: ${err?.message ?? err}`);
     return null;
   }
 }
@@ -303,7 +304,7 @@ async function commandsOfSafe(entry) {
   try {
     return await commandsOf(entry);
   } catch (err) {
-    console.error(`[agent] 命令清单构建失败 ${entry.cwd}: ${err?.message ?? err}`);
+    logErr(`[agent] 命令清单构建失败 ${entry.cwd}: ${err?.message ?? err}`);
     return [];
   }
 }
@@ -368,7 +369,7 @@ async function refreshFocus(bus, entry) {
     }
     patchRows(bus, [rowOf(entry)]);
   } catch (err) {
-    console.error(`[agent] 焦点真值帧失败: ${err?.message ?? err}`);
+    logErr(`[agent] 焦点真值帧失败: ${err?.message ?? err}`);
   }
 }
 
@@ -388,7 +389,7 @@ function autoName(entry, m) {
     if (!name) return; // 空白/纯图片 → 弃权（标记已封口，下条不再试：行为可预测）
     s.setSessionName(name);
   } catch (err) {
-    console.error(`[agent] 自动命名失败 ${entry.agentSession.sessionId}: ${err?.message ?? err}`);
+    logErr(`[agent] 自动命名失败 ${entry.agentSession.sessionId}: ${err?.message ?? err}`);
   }
 }
 // 二分法：名册（sessions.patch，全员广播，后台出勤的灯也要动）/ 对话（chat.*，只发 activeId 那一场）。
@@ -560,7 +561,7 @@ function sharedModelRuntime() {
       modelRuntimePromise = null;
       throw err;
     });
-    console.log("[agent] ModelRuntime 初始化中…（读 auth.json/models.json）");
+    log("[agent] ModelRuntime 初始化中…（读 auth.json/models.json）");
   }
   return modelRuntimePromise;
 }
@@ -656,7 +657,7 @@ async function attachSession(sm, bus, { fallbackName = "", parentId = null, dept
     try {
       translate(bus, entry, type, data ?? {});
     } catch (err) {
-      console.error(`[agent] 事件桥异常 ${sessionId} ${type}: ${err?.message ?? err}`);
+      logErr(`[agent] 事件桥异常 ${sessionId} ${type}: ${err?.message ?? err}`);
     }
   });
   await session.bindExtensions({});
@@ -754,7 +755,7 @@ async function openSession(sessionId, bus) {
         // 档案不存在：补真值帧（清 pending）+ 提示（**不动当前 chat**）
         patchRows(bus, [{ id: key, status: "offline" }]);
         notice(bus, { sessionId: key, type: "error", message: `Session 不存在: ${key}` });
-        console.log(`[agent] open 失败：档案不存在 ${key}`);
+        log(`[agent] open 失败：档案不存在 ${key}`);
         return;
       }
       // 父的 sessionId 要现查（档案头里存的是父的**路径**）—— listAll 已拿全，顺手建表
@@ -766,10 +767,10 @@ async function openSession(sessionId, bus) {
       });
     }
     await focusSession(bus, entry);
-    console.log(`[agent] Session 已打开 ${key} @ ${entry.cwd}${entry.agentSession.isStreaming ? "（正在跑）" : ""}`);
+    log(`[agent] Session 已打开 ${key} @ ${entry.cwd}${entry.agentSession.isStreaming ? "（正在跑）" : ""}`);
   } catch (err) {
     // 建运行时/读档案炸了：也必须留帧，否则前端那一行永久 pending
-    console.error(`[agent] open 异常 ${key}: ${err?.message ?? err}`);
+    logErr(`[agent] open 异常 ${key}: ${err?.message ?? err}`);
     patchRows(bus, [{ id: key, status: sessions.has(key) ? statusOf(sessions.get(key)) : "offline" }]);
     notice(bus, { sessionId: key, type: "error", message: `打开失败: ${err?.message ?? err}` });
   }
@@ -791,7 +792,7 @@ async function closeSession(sessionId, bus) {
   patchRows(bus, [{ id: key, status: "offline" }]);
   clearPluginState(bus, key); // 运行时没了 → 插件状态也没了（档案里还在，重开会恢复）
   if (wasFocal) await pushChatFull(bus); // 焦点被清 → 前端整组清空
-  console.log(`[agent] Session ${key} 已收工（运行时释放，档案保留）`);
+  log(`[agent] Session ${key} 已收工（运行时释放，档案保留）`);
 }
 
 /** subagent 用完即收工（释放运行时；**档案保留** → 名册行转 offline，随时可点开回看）。
@@ -805,7 +806,7 @@ async function closeChild(bus, sessionId) {
     await closeSession(key, bus);
     return true;
   } catch (err) {
-    console.error(`[agent] subagent 收工失败 ${key}: ${err?.message ?? err}`);
+    logErr(`[agent] subagent 收工失败 ${key}: ${err?.message ?? err}`);
     return false;
   }
 }
@@ -816,10 +817,10 @@ async function createSession(cwdArg, bus) {
   try {
     const entry = await spawnSession(bus, { cwd: cwdArg });
     await focusSession(bus, entry);
-    console.log(`[agent] Session 已创建 ${entry.agentSession.sessionId} @ ${entry.cwd}（档案惰性落盘，等首次回复写盘）`);
+    log(`[agent] Session 已创建 ${entry.agentSession.sessionId} @ ${entry.cwd}（档案惰性落盘，等首次回复写盘）`);
   } catch (err) {
     // 此刻可能还没有 id（也就没有行）——前端清的是「新建」按钮的 loading，所以 notice 够了
-    console.error(`[agent] create 异常 ${cwdArg}: ${err?.message ?? err}`);
+    logErr(`[agent] create 异常 ${cwdArg}: ${err?.message ?? err}`);
     notice(bus, { type: "error", message: `新建 Session 失败: ${err?.message ?? err}` });
   }
 }
@@ -891,7 +892,7 @@ async function deleteSession(sessionId, bus) {
     if (await destroyOne(bus, t)) deleted.push(t.id);
   }
   patchRows(bus, deleted.map((id) => ({ id, deleted: true })), await agentsSnapshot());
-  console.log(
+  log(
     `[agent] Session ${key} 已销毁（${info ? "运行时 + 档案" : "幽灵，无档案"}${kids.length ? `；连带子场 ${kids.length} 个` : ""}）`
   );
 }
@@ -924,11 +925,11 @@ async function sweepIdle(bus) {
     if (busy) continue; // 在跑的一律不碰
     const idle = now - (entry.lastActiveAt ?? now);
     if (idle < IDLE_LIMIT_MS) continue;
-    console.log(`[agent] 呆滞 ${Math.round(idle / 60000)} 分钟 → 自动收工 ${id}`);
+    log(`[agent] 呆滞 ${Math.round(idle / 60000)} 分钟 → 自动收工 ${id}`);
     try {
       await closeSession(id, bus);
     } catch (err) {
-      console.error(`[agent] 呆滞清理异常 ${id}: ${err?.message ?? err}`);
+      logErr(`[agent] 呆滞清理异常 ${id}: ${err?.message ?? err}`);
     }
   }
 }
@@ -1009,7 +1010,7 @@ async function promptSession(sessionId, text, images, bus) {
   const hit = builtinOf(raw);
   if (hit) {
     // 命令：不起 run、不产生用户消息、不进 transcript；受理即回（/compact 跑几十秒不能卡输入框）
-    console.log(`[agent] 命令受理 ${key}: /${hit.name}`);
+    log(`[agent] 命令受理 ${key}: /${hit.name}`);
     BUILTINS[hit.name]
       .run(entry, hit.args, bus)
       .then((res) => {
@@ -1018,7 +1019,7 @@ async function promptSession(sessionId, text, images, bus) {
       })
       .catch((err) => {
         // 命令自身失败（未知模型 / 参数错 / 没得压缩）：只弹错，不灭 busy（它本就不起 run）
-        console.error(`[agent] 命令 /${hit.name} 失败 ${key}: ${err?.message ?? err}`);
+        logErr(`[agent] 命令 /${hit.name} 失败 ${key}: ${err?.message ?? err}`);
         notice(bus, { sessionId: key, type: "error", message: String(err?.message ?? err) });
       })
       .finally(() => {
@@ -1029,20 +1030,20 @@ async function promptSession(sessionId, text, images, bus) {
   }
 
   if (entry.agentSession.isStreaming) {
-    console.log(`[agent] steer 受理 ${key}: “${truncateText(raw) || "（无文字）"}”${tag}（等当前 toolCall 收尾后投递）`);
+    log(`[agent] steer 受理 ${key}: “${truncateText(raw) || "（无文字）"}”${tag}（等当前 toolCall 收尾后投递）`);
     entry.agentSession.steer(raw, imgs).catch((err) => {
       // 插队被拒（压缩 / 重试临界等）或扩展命令（SDK 不给插队）：run 还在跑，只弹错 + 补真值帧
-      console.error(`[agent] steer 失败 ${key}: ${err?.message ?? err}`);
+      logErr(`[agent] steer 失败 ${key}: ${err?.message ?? err}`);
       notice(bus, { sessionId: key, type: "error", message: String(err?.message ?? err) });
       void refreshFocus(bus, entry);
     });
     return;
   }
 
-  console.log(`[agent] prompt 受理 ${key}: “${truncateText(raw) || "（无文字）"}”${tag}`);
+  log(`[agent] prompt 受理 ${key}: “${truncateText(raw) || "（无文字）"}”${tag}`);
   entry.agentSession.prompt(raw, imgs ? { images: imgs } : undefined).catch((err) => {
     // 没起跑就炸（无 key / 没选模型 / 压缩中 / 被抢先）→ 补真值帧（清 pending）+ 弹错
-    console.error(`[agent] prompt 失败 ${key}: ${err?.message ?? err}`);
+    logErr(`[agent] prompt 失败 ${key}: ${err?.message ?? err}`);
     notice(bus, { sessionId: key, type: "error", message: String(err?.message ?? err) });
     void refreshFocus(bus, entry);
   });
@@ -1061,10 +1062,10 @@ async function abortSession(sessionId, bus) {
   try {
     const queued = entry.agentSession.clearQueue();
     const n = (queued?.steering?.length ?? 0) + (queued?.followUp?.length ?? 0);
-    console.log(`[agent] abort 受理 ${key}${n ? `（回收未投递 ${n} 条）` : ""}`);
+    log(`[agent] abort 受理 ${key}${n ? `（回收未投递 ${n} 条）` : ""}`);
     await entry.agentSession.abort();
   } catch (err) {
-    console.error(`[agent] abort 失败 ${key}: ${err?.message ?? err}`);
+    logErr(`[agent] abort 失败 ${key}: ${err?.message ?? err}`);
     notice(bus, { sessionId: key, type: "error", message: String(err?.message ?? err) });
   }
   await refreshFocus(bus, entry);
@@ -1115,7 +1116,7 @@ function safeOn(bus, event, fn) {
   bus.on(event, (...args) =>
     Promise.resolve()
       .then(() => fn(...args))
-      .catch((err) => console.error(`[agent] handler ${event} 异常: ${err?.message ?? err}`))
+      .catch((err) => logErr(`[agent] handler ${event} 异常: ${err?.message ?? err}`))
   );
 }
 

@@ -15,6 +15,7 @@
 //
 // ★ 为什么 sync 不带 jwtSecret / password：签名密钥下发 = 谁都能自己签 token；
 //   密码前端只需要"设置"、不需要"读到"（见 setting.js 的 toWire）。
+import { log, logErr } from "./log.js";
 import { get, toWire, update } from "./setting.js";
 
 /** 下发当前设置真值（$conn.open / 每次变更后）。
@@ -31,7 +32,7 @@ export function installSettingService(bus) {
       update(patch);
       pushSettings(bus);
     } catch (err) {
-      console.error("[setting] 保存失败:", err?.message ?? err);
+      logErr("[setting] 保存失败:", err?.message ?? err);
       pushSettings(bus); // 前端拿到的是旧真值 → 自动回滚 UI
       bus.emit(
         "setting.notice",
@@ -44,7 +45,7 @@ export function installSettingService(bus) {
   // 连接 / 重连：推全量（前端据此渲染设置页、决定语音按钮显不显）
   bus.on("$conn.open", () => {
     const s = get();
-    console.log(
+    log(
       `[setting] 下发设置（tts=${s.tts.enabled ? "开" : "关"} stt=${s.stt.enabled ? "开" : "关"}）`
     );
     pushSettings(bus);

@@ -11,8 +11,11 @@ import { nodeTransport } from "@pi-chamber/bus/transport-node.js";
 const BASE = process.env.BASE || "http://localhost:3001";
 // 登录密码从**设置文件**读（不再有 .env）；SMOKE_PASSWORD 可临时覆盖
 const PASSWORD = process.env.SMOKE_PASSWORD || readSetting()?.password;
-// 日志统一在仓库根 logs/（见 logger.js）；从脚本位置算，不依赖 cwd
-const LOG_FILE = join(resolve(dirname(fileURLToPath(import.meta.url)), "../../.."), "logs", "server.log");
+// 日志路径与 src/log.js **同一套算法**（PI_CHAMBER_HOME/logs > 仓库根 logs；LOG_FILE 可覆盖）：
+// 服务端写哪，这里就读哪 —— 否则本机设了 PI_CHAMBER_HOME 时这个断言会静默降级成“跳过”。
+const LOG_FILE =
+  process.env.LOG_FILE ??
+  join(process.env.PI_CHAMBER_HOME ?? resolve(dirname(fileURLToPath(import.meta.url)), "../../.."), "logs", "server.log");
 
 if (!PASSWORD) {
   console.error(`拿不到登录密码（设置文件 ${settingFile()} 里没有 password？）`);

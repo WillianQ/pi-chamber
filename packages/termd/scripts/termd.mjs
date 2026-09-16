@@ -17,9 +17,8 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { DEFAULT_PORT, ensureTermdRunning, health, requestShutdown } from "../src/spawn.js";
 
-// 家目录口径与 spawn.js / daemon.js 一致（token 与日志都落这儿 —— 别报一个不存在的路径）
+// 家目录口径与 spawn.js / daemon.js 一致（token 落这儿）
 const HOME = process.env.PI_CHAMBER_HOME || path.join(os.homedir(), ".pi", "pi-chamber");
-const LOG_FILE = path.join(HOME, "logs", "termd.log");
 
 // 端口：`--port N` > 默认 3002（本文件不读 env —— 与 daemon/spawn 口径一致）
 const PORT = (() => {
@@ -34,7 +33,6 @@ async function status() {
   const h = await health({ port: PORT });
   console.log(`端口     : ${PORT}（仅 loopback）`);
   console.log(`健康     : ${h ? `✅ 在跑（pid ${h.pid}，终端 ${h.terms} 个，已活 ${Math.round(h.uptime)}s）` : "❌ 没响应"}`);
-  console.log(`日志     : ${LOG_FILE}`);
   return !!h;
 }
 
@@ -44,7 +42,7 @@ async function start() {
     return true;
   }
   const ok = await ensureTermdRunning({ port: PORT, spawnIfNeeded: true });
-  console.log(ok ? `[termd] 已就绪（端口 ${PORT}）` : `[termd] 起不来，看 ${LOG_FILE}`);
+  console.log(ok ? `[termd] 已就绪（端口 ${PORT}）` : `[termd] 起不来（端口 ${PORT} 被占？termd 自己不打日志）`);
   return ok;
 }
 
@@ -74,7 +72,7 @@ async function stop() {
   }
   await sleep(300);
   const gone = !(await health({ port: PORT }));
-  console.log(gone ? "[termd] 已强杀" : "[termd] 还在？看 " + LOG_FILE);
+  console.log(gone ? "[termd] 已强杀" : "[termd] 还在？（硬杀没生效，看进程）");
   return gone;
 }
 

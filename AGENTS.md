@@ -104,15 +104,24 @@ pnpm build:exe
 
 工作流注意：
 
-- 后端 3001 的 dev 是 `node --watch` 自重启，监听 `packages/server/src/`、`packages/bus/`。**不要自己启/杀服务**；验证靠"改代码 → 等服务自动重启 → 冒烟脚本打 3001 → `tail logs/server.log`"。
+- 后端 3001 的 dev 是 `node --watch` 自重启，监听 `packages/server/src/`、`packages/bus/`。**不要自己启/杀服务**；验证靠"改代码 → 等服务自动重启 → 冒烟脚本打 3001 → `tail <日志文件>`"。
   （dev 端口靠 `cross-env PORT=3001` 注入 —— setting.js 只把 `PORT` 环境变量当**覆盖值**，不落盘；生产没有这个变量，端口以设置文件为准。）
-- **日志策略（位置统一在仓库根 `logs/`）**：
+- **日志策略（唯一出口 = `src/log.js` 的 `log/logErr/logWarn`）**：
   | 模式 | 文件日志 | stdout | stderr |
   |---|---|---|---|
-  | `pnpm dev`（`LOG=1`） | ✅ `logs/server.log`（**全量含内容流帧**，启动即清空） | 终端 | 终端 |
-  | `pnpm start` / `pnpm bg`（生产） | ❌ 不写 | 终端 / **丢弃** | 终端 / `logs/server.err.log` |
+  | `pnpm dev`（`LOG=1`） | ✅ `server.log`（**全量含内容流帧**，启动即清空） | 终端 | 终端 |
+  | `pnpm start` / `pnpm bg`（生产） | ❌ 不写 | 终端 / **丢弃** | 终端 / `server.err.log` |
   为什么生产不写：内容流帧（`agent.chat.delta` / `term.output`）每秒几十条，写下去纯占空间（实测占 84%），而生产没有看日志的场景。临时要：`LOG=1 pnpm start`。
+  **四条规矩**（都实现在 `log.js` 一个文件里，业务代码只调 `log()`）：
+  ① 前台终端**始终**打印（与写不写盘无关）；② 写盘判据只有一个 = `LOG === "1"`（dev script 注入，生产/exe 没有）；
+  ③ 启动即清空（记的是本轮运行）；④ **base64 只留前 10 字符**（终端与文件都削）+ 单行 4000 字符上限 ——
+  图片（~150KB）与音频/终端输出块（几 KB）整段刷屏的问题就此消失，`ws.js` 不再自带一套脱敏。
+  实现：`log.js` 给 `console.log/error/warn` 挂一层 patch（**全仓唯一出现 `console` 的文件**）——
+  业务代码调 `log()`、第三方（express / ws / pi SDK）调 `console.*`，**同一条路**：削 → 打印 →（dev）写盘；
+  写盘串成一条 promise 链，异步不阻塞但**顺序与调用顺序一致**。bus 走注入（`createBus({log})`，前端不传=静默）。
   路径一律**从文件位置算**（`import.meta.url` 往上推），不用 `resolve("logs",…)` —— 那是相对 cwd，从哪启动就落哪（曾在仓库根留过一个十天前的僵尸日志）。
+  **落点**：`PI_CHAMBER_HOME/logs/`（默认 `~/.pi/pi-chamber/logs`）> 仓库根 `logs/`；`LOG_FILE` 可覆盖（e2e 测试用它指到临时目录）。
+  注意 `PI_CHAMBER_HOME` 可能被机器环境变量占着 → 找日志以 `logs/` 两个位置都看一眼；冒烟脚本 `smoke.js` 用的是同一套算法。
 - 冒烟脚本默认 cwd 是 `packages/server` 自身目录——**不是 agent space**；要打真实 agent 目录请传参：`pnpm run agent-smoke -- <cwd>`（`web-smoke` 同理）。
 - 终端归 **termd**：`pnpm dev` 的后端自重启（`node --watch`）**不杀终端**（PTY 不在它手里）；想清空终端用 `pnpm termd restart`。反过来，`packages/server/src/*` 改动会让 chamber 重启，前端自动重连并重新接管屏幕（回放断线期间的输出）——这是设计好的，不是 bug。
 - 冒烟脚本登录：从**设置文件**读 `password` 打 `/api/login`；拿不到就退回用 `jwtSecret` 自签 token（不阻塞冒烟）。
@@ -146,9 +155,10 @@ pi-chamber/
 │                              #   与 build/dist/pi-chamber.exe（快照）各管一边
 ├── scripts/build-exe.mjs      # ★ 打包脚本：前端 vite → 收集资产 → rolldown 打后端单文件 → Node SEA 合成 exe → 换图标
 ├── scripts/sea-entry.mjs      # ★ exe 入口：一个 exe 两角色（chamber / --termd）+ 首次运行解压资产
-├── logs/                      # ★ 所有运行期日志集中于此（gitignored）：
-│                              #   server.log（dev 全量；启动清空）· server.err.log（生产 stderr）
-│                              #   termd.log · termd.boot.log（每次拉起 termd 的记录）· bg.pid
+├── logs/                      # ★ chamber 的运行期日志集中于此（gitignored）：
+│                              #   server.log（dev 全量；启动清空）· server.err.log（生产 stderr）· bg.pid
+│                              #   ★ 设了 PI_CHAMBER_HOME 时，日志落 <HOME>/logs/（默认 ~/.pi/pi-chamber/logs）
+│                              #   ★ termd **一个字节都不写**（它自己不打日志、stdout 也丢掉）
 └── packages/
     ├── bus/                   # @pi-chamber/bus：共享协议核心，零依赖纯 ESM，平铺 4 文件
     │   ├── core.js            #   createBus 协议机
@@ -165,11 +175,12 @@ pi-chamber/
     │   │   └── smoke.mjs      #   直连 termd 的冒烟（23 项：鉴权/回放/每连接 attach/owner/关已退出的不崩）
     │   ├── test/              #   sessions 单测（17 项）
     │   ├── data/token         #   运行期：一行随机 token（gitignored；daemon 退出时删）
-    │   └── logs 不再有         #   日志统一在仓库根 logs/（见上）
+    │   └── 不打日志           #   termd 不写文件、不打印（要探活走 /health 或 `pnpm termd status`）
     ├── server/                # @pi-chamber/server：Express + WS
     │   ├── package.json
     │   ├── src/               #   框架件 + 六个 Service 全平铺；Agent 域是唯一的文件夹
-    │   │   ├── server.js  app.js  auth.js  setting.js  logger.js  bus.js  ws.js   # 框架件
+    │   │   ├── server.js  app.js  auth.js  setting.js  log.js  bus.js  ws.js   # 框架件
+    │   │   │   # log.js = 日志唯一出口（patch console：削 base64 + dev 写盘 + 启动清空），见 §2.4
     │   │   │   # setting.js = 全局设置的**纯存储层**（读盘/校验/原子写/toWire），不碰 bus
     │   │   ├── setting-service.js      # Setting 域：收 setting.update + 推 setting.sync（连接时 / 变更后）
     │   │   ├── agent-service/          # Agent 域（唯一带子目录的：体量最大；各文件职责见文件头注）

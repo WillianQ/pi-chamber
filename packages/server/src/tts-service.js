@@ -26,6 +26,7 @@
 //   - 音频格式：PCM16 单声道，sample_rate 硬编码 22050，speak 回执携带供前端建 AudioContext。
 //   - stop 兜底：发 cancel 后 3s 阿里未回 task-finished → 强收束 end{cancelled}（用户要求 stop 必回 end）。
 //     缺口/待办：finish（正常 flush）没有兜底计时器，极罕见阿里不回 task-finished 时会悬挂到连接断开。
+import { log, logErr } from "./log.js";
 import WebSocket from "ws";
 import crypto from "node:crypto";
 import { get as getSetting } from "./setting.js";
@@ -135,7 +136,7 @@ function endSession(bus, reason, error) {
   audioEmitted = false;
   retried = false;
   const p = reason === "error" ? { reason, error: error ?? "语音合成失败" } : { reason };
-  console.log(`[tts] 会话终结 reason=${reason}${error ? `（${error}）` : ""}`);
+  log(`[tts] 会话终结 reason=${reason}${error ? `（${error}）` : ""}`);
   bus.emit("tts.end", p, { net: true });
 }
 
@@ -153,13 +154,13 @@ function connectDash(bus) {
 
   ws.on("open", () => {
     dashConnecting = false;
-    console.log(`[tts] DashScope 连接建立（flush ${connBuf.length} 条排队命令）`);
+    log(`[tts] DashScope 连接建立（flush ${connBuf.length} 条排队命令）`);
     for (const m of connBuf) ws.send(m);
     connBuf = [];
   });
   ws.on("message", (data, isBinary) => onDashMessage(data, isBinary, bus));
   ws.on("error", (err) => {
-    console.error("[tts] DashScope 连接错误:", err.message);
+    logErr("[tts] DashScope 连接错误:", err.message);
     dashConnecting = false;
     handleDashGone(ws, bus);
   });
@@ -174,7 +175,7 @@ function handleDashGone(ws, bus) {
   if (dashWs !== ws) return; // 旧连接 / 已被处理（如手动 close 后又被重连覆盖）
   dashWs = null;
   connBuf = [];
-  console.log("[tts] 与阿里连接断开");
+  log("[tts] 与阿里连接断开");
 
   if (!taskId) return; // 空闲断线：静默，下轮 speak 惰性重建
 
@@ -200,7 +201,7 @@ function handleDashGone(ws, bus) {
   taskStarted = false;
   taskId = crypto.randomUUID();
   pendingContinue = texts.slice();
-  console.log(`[tts] 未出声断线，自动重连重放 ${pendingContinue.length} 段文本（task ${taskId}）`);
+  log(`[tts] 未出声断线，自动重连重放 ${pendingContinue.length} 段文本（task ${taskId}）`);
   sendRunTask(bus);
 }
 // —— 阿里消息翻译层（前端只见 tts.audio / tts.end；厂商壳全咽在这）——
@@ -226,7 +227,7 @@ function onDashMessage(raw, isBinary, bus) {
   switch (event) {
     case "task-started": {
       taskStarted = true;
-      console.log(`[tts] task ${taskId} started`);
+      log(`[tts] task ${taskId} started`);
       if (phase === "cancelling") {
         sendFinishCmd(true); // stop 早于 started 到：不发文本，直接 cancel
         break;
@@ -239,18 +240,18 @@ function onDashMessage(raw, isBinary, bus) {
       const out = msg?.payload?.output;
       if (out?.type === "sentence-end") {
         const chars = msg?.payload?.usage?.characters ?? "";
-        console.log(`[tts] 句 ${out.sentence?.index} 完成（累计 ${chars} 字符）`);
+        log(`[tts] 句 ${out.sentence?.index} 完成（累计 ${chars} 字符）`);
       }
       break;
     }
     case "task-finished": {
-      console.log(`[tts] task ${taskId} finished`);
+      log(`[tts] task ${taskId} finished`);
       endSession(bus, dropping || phase === "cancelling" ? "cancelled" : "done");
       break;
     }
     case "task-failed": {
       const err = msg?.header?.error_message || "合成任务失败";
-      console.error(`[tts] task ${taskId} failed:`, err);
+      logErr(`[tts] task ${taskId} failed:`, err);
       endSession(bus, "error", err);
       break;
     }
@@ -261,7 +262,7 @@ function onDashMessage(raw, isBinary, bus) {
 
 // —— bus 注册（唯一出口）——
 export function installTtsService(bus) {
-  if (!getSetting().tts.dashscopeApiKey) console.log("[tts] 未配置百炼 key（可在「设置 → 朗读」里填）");
+  if (!getSetting().tts.dashscopeApiKey) log("[tts] 未配置百炼 key（可在「设置 → 朗读」里填）");
 
   // speak（request）：文本进当前会话；无会话 → 开新 run-task；会话中 → continue-task 追加。受理即回
   bus.on("tts.speak", async (payload) => {
@@ -285,7 +286,7 @@ export function installTtsService(bus) {
       pendingContinue = [...segs];
       audioEmitted = false;
       retried = false;
-      console.log(`[tts] 新会话 task ${taskId}，${texts.length} 段文本（${text.length} 字符）`);
+      log(`[tts] 新会话 task ${taskId}，${texts.length} 段文本（${text.length} 字符）`);
       sendRunTask(bus); // 连接没就绪则惰性建连，open 后 flush
     } else {
       // 追加续文本
@@ -297,7 +298,7 @@ export function installTtsService(bus) {
           pendingContinue.push(s); // 没 started/没连上：等 task-started flush
         }
       }
-      console.log(`[tts] 追加 ${segs.length} 段文本（累计 ${texts.join("").length} 字符）`);
+      log(`[tts] 追加 ${segs.length} 段文本（累计 ${texts.join("").length} 字符）`);
     }
     return { ok: true, sampleRate: SAMPLE_RATE };
   });
@@ -306,7 +307,7 @@ export function installTtsService(bus) {
   bus.on("tts.finish", () => {
     if (!taskId || phase !== "running") return; // 无会话 / 已收尾中 → 幂等忽略
     phase = "finishing";
-    console.log(`[tts] finish：请求正常收尾（task ${taskId}）`);
+    log(`[tts] finish：请求正常收尾（task ${taskId}）`);
     sendFinishCmd(false); // 早于 started 则 task-started 分支补发
   });
 
@@ -315,12 +316,12 @@ export function installTtsService(bus) {
     if (!taskId || dropping) return;
     dropping = true;
     phase = "cancelling";
-    console.log(`[tts] stop：打断会话（task ${taskId}）`);
+    log(`[tts] stop：打断会话（task ${taskId}）`);
     sendFinishCmd(true);
     if (stopTimer) clearTimeout(stopTimer);
     stopTimer = setTimeout(() => {
       stopTimer = null;
-      console.log("[tts] stop 兜底：阿里未回 task-finished，强收束");
+      log("[tts] stop 兜底：阿里未回 task-finished，强收束");
       endSession(bus, "cancelled");
     }, STOP_TIMEOUT);
   });
@@ -328,7 +329,7 @@ export function installTtsService(bus) {
   // break（request，测试口）：只断开阿里 WS，不做多余处理——close 路径即"模拟断网"
   bus.on("tts.break", async () => {
     if (!dashWs) return { ok: true, alreadyDown: true };
-    console.log("[tts] tts.break：手动断开阿里连接（模拟断网）");
+    log("[tts] tts.break：手动断开阿里连接（模拟断网）");
     try {
       dashWs.close();
     } catch {}
@@ -359,7 +360,7 @@ export function installTtsService(bus) {
       }
       dashConnecting = false;
       connBuf = [];
-      console.log("[tts] 浏览器断线，清理在途会话与阿里连接");
+      log("[tts] 浏览器断线，清理在途会话与阿里连接");
     }
   });
 
@@ -368,9 +369,9 @@ export function installTtsService(bus) {
   bus.on("setting.sync", (s) => {
     if (s?.tts?.enabled) return;
     if (!taskId) return;
-    console.log("[tts] 朗读被关闭 → 掐掉在途会话");
+    log("[tts] 朗读被关闭 → 掐掉在途会话");
     endSession(bus, "cancelled");
   });
 
-  console.log(`[tts] 语音合成服务已装（model=${MODEL} pcm@${SAMPLE_RATE}Hz）`);
+  log(`[tts] 语音合成服务已装（model=${MODEL} pcm@${SAMPLE_RATE}Hz）`);
 }

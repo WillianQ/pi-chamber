@@ -11,6 +11,7 @@
 //   这边就是一个 WS 客户端 + 三张白名单，不需要 bus 中转，也不动主 bus 的 transport 槽。
 //
 // 帧名权威表见 AGENTS.md 4.2（term.* 九条）；本文件里字符串字面量与 daemon.js 各写一份（本仓惯例）。
+import { log } from "./log.js";
 import WebSocket from "ws";
 import { ensureTermdRunning, readToken } from "@pi-chamber/termd/spawn.js";
 import { get as getSetting } from "./setting.js";
@@ -76,7 +77,7 @@ export function installTermService(bus) {
     if (retryTimer) return;
     const delay = Math.min(500 * 2 ** attempts, 10_000);
     attempts += 1;
-    console.log(`[term] 与 termd 断开（${reason}），${delay}ms 后重连（第 ${attempts} 次）`);
+    log(`[term] 与 termd 断开（${reason}），${delay}ms 后重连（第 ${attempts} 次）`);
     retryTimer = setTimeout(() => {
       retryTimer = null;
       connect();
@@ -103,12 +104,12 @@ export function installTermService(bus) {
       connected = true;
       error = null;
       attempts = 0;
-      console.log("[term] 已接入 termd");
+      log("[term] 已接入 termd");
       try {
         const p = await rpc("term.list", null); // 拉一次名册（同时喂前端）
         if (p?.terms) cache = p;
       } catch (err) {
-        console.log(`[term] 拉名册失败: ${err?.message ?? err}`);
+        log(`[term] 拉名册失败: ${err?.message ?? err}`);
       }
       pushList();
     });
@@ -136,7 +137,7 @@ export function installTermService(bus) {
       }
     });
 
-    sock.on("error", (err) => console.log(`[term] 私线出错: ${err?.message ?? err}`));
+    sock.on("error", (err) => log(`[term] 私线出错: ${err?.message ?? err}`));
 
     sock.on("close", () => {
       clearTimeout(guard);
@@ -177,14 +178,14 @@ export function installTermService(bus) {
   (async () => {
     if (!(await ensureTermdRunning({ port: PORT, spawnIfNeeded: true }))) {
       error = "termd 起不来（看 packages/termd/logs/）";
-      console.log(`[term] ${error}`);
+      log(`[term] ${error}`);
       scheduleRetry("就绪等待超时");
       return;
     }
     connect();
   })();
 
-  console.log("[term] Term 域已装（终端进程归 packages/termd 的守护进程，chamber 只做帧桥接）");
+  log("[term] Term 域已装（终端进程归 packages/termd 的守护进程，chamber 只做帧桥接）");
   return {
     get connected() {
       return connected;

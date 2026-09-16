@@ -27,6 +27,7 @@
 //      不做运行期判断（那种判断总会有漏网的路）。用户明确要求：subagent 不能再调 subagent。
 //   ④ **给模型的 content 只要「成本头 + 结论」**，绝不给 transcript（那等于白派）。
 
+import { logWarn } from "../../log.js";
 import { Type } from "typebox";
 
 const MAX_DEPTH = 1; // 只允许一层：子场拿不到本工具 → 递归天然断掉（不要改，见铁律③）
@@ -122,7 +123,7 @@ export function create({ cwd, depth, config, getSession, modelRuntime, spawnSess
     const slash = ref.indexOf("/");
     const m = slash > 0 ? modelRuntime.getModel(ref.slice(0, slash), ref.slice(slash + 1)) : undefined;
     if (!m) {
-      console.warn(`[plugins] subagent.model 认不出「${ref}」→ 退回父场模型`);
+      logWarn(`[plugins] subagent.model 认不出「${ref}」→ 退回父场模型`);
       return { model: self?.model, thinkingLevel: self?.thinkingLevel };
     }
     return { model: m };

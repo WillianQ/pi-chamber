@@ -27,7 +27,7 @@ function randId32() {
   return Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
 }
 
-export function createBus({ requestTimeout = 3000 } = {}) {
+export function createBus({ requestTimeout = 3000, log = () => {} } = {}) {
   const handlers = new Map(); // event -> Set<fn>
   const pending = new Map(); // id -> { resolve, reject, timer }
   let transport = null; // 唯一的线（transport 槽）
@@ -55,7 +55,7 @@ export function createBus({ requestTimeout = 3000 } = {}) {
       try {
         fn(payload, meta, bus);
       } catch (err) {
-        console.log(`[bus] handler(${event}) 异常: ${err?.message ?? err}`);
+        log(`[bus] handler(${event}) 异常: ${err?.message ?? err}`);
       }
     }
     return true;

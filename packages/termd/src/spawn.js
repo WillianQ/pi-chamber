@@ -24,10 +24,7 @@ const HOME = process.env.PI_CHAMBER_HOME || path.join(os.homedir(), ".pi", "pi-c
 //   ★ 绝不能用 PI_CHAMBER_HOME 判：exe 会把这个变量注入给子进程，从 chamber 内嵌终端里跑 dev
 //     代码会被误判成打包版，去读打包版的 token（真踩过：`pnpm termd status` 一直报"没响应"）。
 const SEA = !fileURLToPath(import.meta.url).endsWith(".js");
-// 日志与 chamber 的 server.log 同一处（找日志只需看一个目录）
-const LOG_DIR = path.join(HOME, "logs");
 const TOKEN_FILE = path.join(HOME, "data", "token");
-
 export const DEFAULT_PORT = 3002;
 export const DAEMON_PATH = DAEMON_JS;
 
@@ -59,16 +56,14 @@ export async function health({ port = DEFAULT_PORT, timeoutMs = 1200 } = {}) {
 
 /** 拉起守护进程（detached：chamber 死了它还活着 —— 这正是本功能的意义） */
 export function spawnDaemon({ port = DEFAULT_PORT } = {}) {
-  fs.mkdirSync(LOG_DIR, { recursive: true });
-  const out = fs.openSync(path.join(LOG_DIR, "termd.boot.log"), "a");
-  fs.writeSync(out, `\n===== 拉起 termd ${new Date().toLocaleString()}（端口 ${port}）=====\n`);
   const child = spawn(
     process.execPath,
     SEA ? ["--termd", "--port", String(port)] : [DAEMON_JS, "--port", String(port)],
     {
       cwd: SEA ? path.dirname(process.execPath) : PKG_DIR,
       detached: true,
-      stdio: ["ignore", out, out],
+      // ★ 三路都丢：termd 不打日志（它自己一个字节都不写）—— 要探活走 /health，不要看日志文件
+      stdio: ["ignore", "ignore", "ignore"],
       windowsHide: true,
     }
   );

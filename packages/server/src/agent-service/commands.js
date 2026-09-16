@@ -1,3 +1,4 @@
+import { logWarn } from "../log.js";
 // ───────────────────── agent-service / commands.js ─────────────────────
 // / 命令域：内置命令表 + 四源清单（内置 / 扩展 / prompt 模板 / skill）+ 二级参数池。
 //
@@ -147,7 +148,7 @@ async function extensionOptions(cmd) {
     if (!Array.isArray(items) || !items.length) return null;
     return items.map((it) => ({ value: it.value, description: it.description ?? "" }));
   } catch (err) {
-    console.warn(`[agent] 扩展命令 /${cmd.invocationName} 参数补全失败（降级纯手打）: ${err?.message ?? err}`);
+    logWarn(`[agent] 扩展命令 /${cmd.invocationName} 参数补全失败（降级纯手打）: ${err?.message ?? err}`);
     return null;
   }
 }

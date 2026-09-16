@@ -19,6 +19,7 @@
 //   （音频 = ws binary，与命令同 socket）
 // 接收（data.header.event）：task-started / result-generated / task-finished / task-failed
 
+import { log, logErr } from "./log.js";
 import WebSocket from "ws";
 import crypto from "node:crypto";
 import { get as getSetting } from "./setting.js";
@@ -81,13 +82,13 @@ function connectDash(bus) {
 
   ws.on("open", () => {
     dashConnecting = false;
-    console.log("[stt] DashScope 连接建立");
+    log("[stt] DashScope 连接建立");
     for (const m of connBuf) ws.send(m);
     connBuf = [];
   });
   ws.on("message", (data) => onDashMessage(bus, data));
   ws.on("error", (err) => {
-    console.error("[stt] DashScope 连接错误:", err.message);
+    logErr("[stt] DashScope 连接错误:", err.message);
     dashConnecting = false;
     if (dashWs === ws) dashWs = null;
     if (curTaskId) {
@@ -98,7 +99,7 @@ function connectDash(bus) {
   ws.on("close", () => {
     dashConnecting = false;
     if (dashWs === ws) dashWs = null;
-    console.log("[stt] DashScope 连接关闭");
+    log("[stt] DashScope 连接关闭");
     // 在途任务随连接黄了 → 清态；录音中前端后续音频块会以新任务自动重启（自愈）
     if (curTaskId) {
       emitError(bus, "语音识别连接中断");
@@ -140,7 +141,7 @@ function onDashMessage(bus, data) {
   switch (event) {
     case "task-started": {
       taskReady = true;
-      console.log(`[stt] task ${curTaskId} started，倒灌 ${audioBuf.length} 块积压音频`);
+      log(`[stt] task ${curTaskId} started，倒灌 ${audioBuf.length} 块积压音频`);
       for (const b of audioBuf) dashWs?.send(b);
       audioBuf = [];
       if (ended) sendFinishTask(); // 录音结束得比阿里快：started 一到就补 finish
@@ -161,14 +162,14 @@ function onDashMessage(bus, data) {
       break;
     }
     case "task-finished": {
-      console.log(`[stt] task ${curTaskId} finished`);
+      log(`[stt] task ${curTaskId} finished`);
       bus.emit("stt.final", { text: finalBuf }, { net: true }); // 空文本也发，前端据此清 UI 不注入
       resetTask();
       break;
     }
     case "task-failed": {
       const err = msg?.header?.error_message || "语音识别任务失败";
-      console.error(`[stt] task ${curTaskId} failed:`, err);
+      logErr(`[stt] task ${curTaskId} failed:`, err);
       emitError(bus, err);
       resetTask();
       break;
@@ -180,7 +181,7 @@ function onDashMessage(bus, data) {
 
 // —— bus 注册（唯一出口）——
 export function installSttService(bus) {
-  if (!sttCfg().dashscopeApiKey) console.log("[stt] 未配置百炼 key（可在「设置 → 识别」里填）");
+  if (!sttCfg().dashscopeApiKey) log("[stt] 未配置百炼 key（可在「设置 → 识别」里填）");
 
   // 前端录音音频块：首块隐式开任务，其余入保险箱/直发
   bus.on("stt.audio", (payload) => {
@@ -236,7 +237,7 @@ export function installSttService(bus) {
         dashWs = null;
       }
       dashConnecting = false;
-      console.log("[stt] 浏览器断线，清理在途语音任务");
+      log("[stt] 浏览器断线，清理在途语音任务");
     }
   });
 
@@ -245,7 +246,7 @@ export function installSttService(bus) {
   bus.on("setting.sync", (s) => {
     if (s?.stt?.enabled) return;
     if (!curTaskId) return;
-    console.log("[stt] 识别被关闭 → 丢弃在途任务");
+    log("[stt] 识别被关闭 → 丢弃在途任务");
     resetTask();
   });
 }

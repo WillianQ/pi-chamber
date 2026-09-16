@@ -16,6 +16,7 @@
 //   回声抑制 = 内容比对：change 读盘 ≠ 内存已知 content 才推 modify —— 自己保存后内存已同步 → 静默；
 //   外部（agent/其他进程）写入 → 内容不同 → 推 modify 全量新内容。
 // 冲突 = 磁盘/后端为准：无 rev 无检测，谁后写算谁的（主要外部写者 = chamber 里的 agent）。
+import { log } from "./log.js";
 import fs from "node:fs/promises";
 import chokidar from "chokidar";
 
@@ -89,7 +90,7 @@ export function installEditorService(bus) {
   });
 
   watcher.on("error", (err) => {
-    console.log(`[editor] watch 出错: ${err?.message ?? err}`);
+    log(`[editor] watch 出错: ${err?.message ?? err}`);
   });
 
   // ── nav.open_file：浏览入口把文件拉进编辑器（归属 nav 命名，入口在 nav） ───
@@ -133,5 +134,5 @@ export function installEditorService(bus) {
     bus.emit("editor.files", { files: [...files.values()] }, { net: true });
   });
 
-  console.log("[editor] 文件编辑服务已装（内存态、重启即清；上限 500KB；watch=chokidar 单例）");
+  log("[editor] 文件编辑服务已装（内存态、重启即清；上限 500KB；watch=chokidar 单例）");
 }

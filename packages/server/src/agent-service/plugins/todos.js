@@ -27,6 +27,7 @@
 // ── 三个状态（waiting / doing / done）──
 //   doing 是这份清单的价值所在：没有它，"进度"就只是个百分比，人不知道 agent 此刻在干哪一条。
 
+import { logErr } from "../../log.js";
 import { Type } from "typebox";
 
 /** 插件标识（= 配置里的键名）+ 占用的工具名（框架用它做"归属"，见 plugins/index.js） */
@@ -108,7 +109,7 @@ export function create({ publishState }) {
         publishState?.(todos); // state = 数组本身（见 create 的入参说明）
       } catch (err) {
         // 推帧失败不影响工具结果（清单照样回给模型、照样落档案）
-        console.error(`[plugins] todos 状态发布失败: ${err?.message ?? err}`);
+        logErr(`[plugins] todos 状态发布失败: ${err?.message ?? err}`);
       }
       return {
         content: [{ type: "text", text: render(todos) }],

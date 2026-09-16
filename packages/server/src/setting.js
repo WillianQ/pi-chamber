@@ -19,6 +19,7 @@
 //   termdPort  终端守护端口（启动时读；改了要重启后端）
 //   tts        { enabled, dashscopeApiKey, voice, rate }  —— 朗读
 //   stt        { enabled, dashscopeApiKey }               —— 识别
+import { log } from "./log.js";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -40,7 +41,7 @@ function migrateLegacyFile() {
     if (fs.existsSync(FILE) || !fs.existsSync(legacy)) return;
     fs.mkdirSync(path.dirname(FILE), { recursive: true });
     fs.renameSync(legacy, FILE);
-    console.log(`[setting] 设置文件已迁移：${legacy} → ${FILE}`);
+    log(`[setting] 设置文件已迁移：${legacy} → ${FILE}`);
   } catch {}
 }
 

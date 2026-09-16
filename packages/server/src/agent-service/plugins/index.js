@@ -52,6 +52,7 @@
 //   所以：**插件工具恒注册，开关只影响激活** —— 于是 `/reload` 能热更开关，不用重开会话。
 //   ★ 唯一改不了的：配置从"没这个键"变成"有这个键"（注册表里没它）→ 得重开一次 Session。
 
+import { logErr } from "../../log.js";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
@@ -73,7 +74,7 @@ async function readConfig(cwd) {
     const j = JSON.parse(await readFile(p, "utf8"));
     return j && typeof j === "object" && !Array.isArray(j) ? j : {};
   } catch (err) {
-    if (err?.code !== "ENOENT") console.error(`[plugins] 配置读不了 ${p}: ${err?.message ?? err}`);
+    if (err?.code !== "ENOENT") logErr(`[plugins] 配置读不了 ${p}: ${err?.message ?? err}`);
     return {};
   }
 }

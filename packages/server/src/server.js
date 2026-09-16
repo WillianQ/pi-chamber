@@ -1,4 +1,5 @@
-import "./logger.js"; // 必须最先引入：接管 console 输出到日志文件
+import "./log.js"; // ★ 必须最先引入：挂上日志 patch（削 base64 + dev 写盘），后面所有输出才走同一条路
+import { log } from "./log.js";
 import http from "node:http";
 import app from "./app.js";
 import { attachWs, installUpgradeAuth } from "./ws.js";
@@ -21,9 +22,9 @@ import { installSettingService } from "./setting-service.js";
 // ★ 必须最先 init：port 与 termdPort 只有启动时读一次（改了要重启后端），其余消费者全是现读。
 //   首次启动会生成 jwtSecret（随机）+ password（demo123456）并落盘，见 setting.js。
 const boot = initSetting();
-console.log(`[setting] 配置文件：${settingFile()}`);
+log(`[setting] 配置文件：${settingFile()}`);
 if (boot.freshPassword) {
-  console.log(`[setting] 首次生成的登录密码：${DEFAULT_PASSWORD}（请尽快在「设置 → 账号」里改掉）`);
+  log(`[setting] 首次生成的登录密码：${DEFAULT_PASSWORD}（请尽快在「设置 → 账号」里改掉）`);
 }
 
 // —— 业务 handler：启动时注册一次，与进程同寿（bus 是单例，不再关心是谁的连接）——
@@ -70,7 +71,7 @@ const wss = attachWs(server);
 installUpgradeAuth(server, wss, "/ws");
 
 server.listen(getSetting().port, () => {
-  console.log(
+  log(
     `HTTP/WS 服务已启动: http://localhost:${getSetting().port} (WS 路径 /ws, bus 单例在线)`
   );
 });

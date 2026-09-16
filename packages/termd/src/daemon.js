@@ -47,20 +47,11 @@ const PORT = (() => {
 const HOME = process.env.PI_CHAMBER_HOME || path.join(os.homedir(), ".pi", "pi-chamber");
 const DATA_DIR = path.join(HOME, "data");
 const TOKEN_FILE = path.join(DATA_DIR, "token");
-// 日志与 chamber 的 server.log 同一处（找日志只需看一个目录）
-const LOG_FILE = path.join(HOME, "logs", "termd.log");
 
-// ── 日志：控制台 + 写文件（照 server/logger.js 的 tee 做法，自带一份不依赖别人） ──
-// termd 只在生命周期事件（起 / 退出 / 连接）写，**不写终端输出流** —— 所以很小，不需轮转。
-// 启动即清空：它重启 = 新的一轮（要留历史的是 termd.boot.log，那个只追加）。
-fs.mkdirSync(path.dirname(LOG_FILE), { recursive: true });
-fs.writeFileSync(LOG_FILE, "");
-const origLog = console.log.bind(console);
-console.log = (...args) => {
-  const line = `${new Date().toISOString()} ${args.join(" ")}`;
-  origLog(line);
-  fs.appendFile(LOG_FILE, line + "\n", () => {});
-};
+// ── 日志：**不打**（不留文件、不打印）──
+// 守护进程的生命周期事件（起/退/连接）对排查没价值，而它的 stdout 由 spawn 侧丢掉；
+// 真要看“termd 到底在不在跑”用 `pnpm termd status`（走 /health），不用日志。
+// chamber 侧的 [term] 行（谁拉起了它、私线通没通）照旧进 chamber 的日志。
 
 // ── shell 探测：启动时探一次，列给前端做「新建终端」的下拉 ────────────────────────
 // 纪律：
@@ -183,10 +174,10 @@ function handle(conn, msg) {
           sessions.close(String(p?.termId ?? ""));
           break;
         default:
-          console.log(`[termd] 未知事件帧: ${e}`);
+          break; // 未知事件帧：静默丢
       }
-    } catch (err) {
-      console.log(`[termd] ${e} 丢弃: ${err?.message ?? err}`);
+    } catch {
+      // 帧处理出错：静默丢（错帧不该拖垮守护进程）
     }
     return;
   }
@@ -285,9 +276,7 @@ wss.on("connection", (ws) => {
   ws.on("close", () => {
     conns.delete(conn);
     sessions.dropConn(conn); // ★ 必须：否则 attachedTo 里留着死连接（泄漏 + 往死 socket 写）
-    console.log(`[termd] chamber 断开 ${conn.id}（剩 ${conns.size} 个；终端继续跑）`);
   });
-  console.log(`[termd] chamber 已接入 ${conn.id}（共 ${conns.size} 个）`);
   sendEvent(conn, "term.list", listPayload()); // 新接入方立刻拿到名册，不用等下一次变更
 });
 
@@ -305,12 +294,8 @@ const hb = setInterval(() => {
 // ── 兵底：守护进程的存活 > 单次操作的完整性 ────────────────────────────────
 // 它一死，所有 PTY 陪葬（而这正是本进程存在的意义）。node-pty 在 Windows 上
 // 偶有异步抛错（如 kill 已退出的 PTY）—— try/catch 拓不住，所以这里必须接住。
-process.on("uncaughtException", (err) => {
-  console.log(`[termd] 未捕获异常（已忽略，进程继续）: ${err?.stack ?? err}`);
-});
-process.on("unhandledRejection", (err) => {
-  console.log(`[termd] 未处理的 Promise 拒绝（已忽略）: ${err?.stack ?? err}`);
-});
+process.on("uncaughtException", () => {});
+process.on("unhandledRejection", () => {});
 
 // ── 生命周期：只绑 loopback；退出时杀光自己管的 PTY + 抹掉**自己的** token 文件 ──
 let shuttingDown = false;
@@ -324,7 +309,6 @@ function removeOwnToken() {
 function shutdown(reason) {
   if (shuttingDown) return;
   shuttingDown = true;
-  console.log(`[termd] 收工（${reason}）：杀掉 ${sessions.count} 个终端`);
   clearInterval(hb);
   sessions.closeAll();
   removeOwnToken();
@@ -345,17 +329,13 @@ process.on("exit", () => {
 // ★ 必须在**写 token 文件之前**判定，否则会把活着的 daemon 的 token 覆盖掉。
 httpServer.on("error", (err) => {
   if (err.code === "EADDRINUSE") {
-    console.log(`[termd] 端口 ${PORT} 已被占用（已有一个在跑？看 pnpm termd status），本次启动放弃`);
+    // 已经有一个在跑（或别的程序占了端口）：放弃本次启动。进程自己就是信号，不用打印
     process.exit(0);
   }
-  console.error(`[termd] 启动失败: ${err?.message ?? err}`);
   process.exit(1);
 });
 
 httpServer.listen(PORT, "127.0.0.1", () => {
   fs.mkdirSync(DATA_DIR, { recursive: true });
   fs.writeFileSync(TOKEN_FILE, TOKEN); // 一行字符串（不是 json）：chamber / CLI 读它来连
-  console.log(`[termd] 已起：http://127.0.0.1:${PORT}（仅 loopback）pid=${process.pid}`);
-  console.log(`[termd] token 落 ${TOKEN_FILE}`);
-  console.log(`[termd] 可用 shell: ${shells.map((s) => `${s.id}(${s.label})`).join(" / ") || "（无！）"}`);
 });
