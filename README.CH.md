@@ -40,7 +40,7 @@ pi-chamber 是 pi 编码 agent（`@earendil-works/pi-coding-agent`）的**远程
 
 ```bash
 pnpm install
-# 不用建任何配置文件：首次启动自动生成 ~/.pi/pi-chamber-global-setting.json
+# 不用建任何配置文件：首次启动自动生成 ~/.pi/pi-chamber/pi-chamber-global-setting.json
 # （随机 jwtSecret + 默认密码 demo123456 —— 首次启动会打印在控制台）
 
 pnpm dev        # 后端 3001（node --watch 自重启）+ 前端 5173（vite HMR）
@@ -211,7 +211,7 @@ pnpm bg start|stop|status|restart      # 后台常驻版（detached 起后端 30
 
 ## 安全提示
 
-- 单用户自用：登录密码在 `~/.pi/pi-chamber-global-setting.json` 里**存明文**（`password`，与 `jwtSecret` 同处）。
+- 单用户自用：登录密码在 `~/.pi/pi-chamber/pi-chamber-global-setting.json` 里**存明文**（`password`，与 `jwtSecret` 同处）。
   首次启动的默认密码是 `demo123456` —— **公网暴露前必须先改**。
 - `jwtSecret` 与 `password` **永不下发前端**（`setting.sync` 里剔掉）。
 - JWT 无状态、无撤销：登出 = 前端丢 token；7 天 TTL 内 token 被偷仍有效（单用户可接受）。

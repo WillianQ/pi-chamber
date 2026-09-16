@@ -40,7 +40,7 @@ pi-chamber is a **remote control room** for the [pi coding agent](https://pi.dev
 
 ```bash
 pnpm install
-# No config files to create: the first start generates ~/.pi/pi-chamber-global-setting.json
+# No config files to create: the first start generates ~/.pi/pi-chamber/pi-chamber-global-setting.json
 # (random jwtSecret + default password demo123456 — printed to the console on first boot)
 
 pnpm dev        # backend on 3001 (node --watch) + frontend on 5173 (vite HMR)
@@ -211,7 +211,7 @@ Logs live in `logs/` at the repo root (`dev` writes everything to `server.log`; 
 
 ## Security notes
 
-- Built for a single user: the login password is stored **in plain text** in `~/.pi/pi-chamber-global-setting.json` (`password`, next to `jwtSecret`).
+- Built for a single user: the login password is stored **in plain text** in `~/.pi/pi-chamber/pi-chamber-global-setting.json` (`password`, next to `jwtSecret`).
   The default password on first boot is `demo123456` — **change it before exposing the server to a network**.
 - `jwtSecret` and `password` are **never sent to the frontend** (`setting.sync` strips them).
 - JWTs are stateless and non-revocable: logging out just means the frontend drops the token; a stolen token stays valid for its 7-day TTL. Acceptable for single-user use.

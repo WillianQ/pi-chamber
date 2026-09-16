@@ -28,16 +28,26 @@ const PID_FILE = path.join(LOG_DIR, "bg.pid");
 const ERR_LOG = path.join(LOG_DIR, "server.err.log");
 
 // 服务端端口：以**设置文件**为准（不再有 .env）。路径规则与 server/src/setting.js 一致：
-// PI_CHAMBER_SETTING 可覆盖（测试隔离），否则 ~/.pi/pi-chamber-global-setting.json。
+// PI_CHAMBER_SETTING 可覆盖（测试隔离），否则 <PI_CHAMBER_HOME>/pi-chamber-global-setting.json
+// （默认 ~/.pi/pi-chamber/…；老位置 ~/.pi/ 下作为只读兜底）。
 function readPort() {
-  const file =
-    process.env.PI_CHAMBER_SETTING ||
-    path.join(os.homedir(), ".pi", "pi-chamber-global-setting.json");
+  const file = process.env.PI_CHAMBER_SETTING || defaultSettingFile();
   try {
     const s = JSON.parse(fs.readFileSync(file, "utf8"));
     if (Number.isInteger(s?.port) && s.port > 0 && s.port < 65536) return s.port;
   } catch {}
   return 3000;
+}
+
+/** 默认位置 = ~/.pi/pi-chamber/…；老位置（~/.pi/ 下）只在新的还没生成时兜底 */
+function defaultSettingFile() {
+  const dir = process.env.PI_CHAMBER_HOME || path.join(os.homedir(), ".pi", "pi-chamber");
+  const now = path.join(dir, "pi-chamber-global-setting.json");
+  const legacy = path.join(os.homedir(), ".pi", "pi-chamber-global-setting.json");
+  try {
+    if (!fs.existsSync(now) && fs.existsSync(legacy)) return legacy;
+  } catch {}
+  return now;
 }
 
 function readPid() {

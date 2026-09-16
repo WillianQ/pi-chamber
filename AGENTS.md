@@ -55,7 +55,8 @@ pi-chamber 是一个**远程、跨平台的 agent 监控操作界面**：chamber
 
 ```bash
 pnpm install                      # workspace 根一次装完四包（node-linker=hoisted，见 .npmrc）
-# 无需配置任何文件：首次启动自动生成 ~/.pi/pi-chamber-global-setting.json（随机 jwtSecret + 默认密码 demo123456）
+# 无需配置任何文件：首次启动自动生成 ~/.pi/pi-chamber/pi-chamber-global-setting.json（随机 jwtSecret + 默认密码 demo123456）
+#   ↑ 位置 = <PI_CHAMBER_HOME>/…（默认 ~/.pi/pi-chamber，与 exe 解压目录同一处；老版本在 ~/.pi/ 下，首次运行自动搬）
 
 pnpm dev                          # 同时起后端 3001 + 前端 5173（--stream 前缀区分两包日志）
 pnpm test                         # node --test，自起 3996~3999 独立实例，不碰 3000/3001
@@ -94,6 +95,7 @@ pnpm build:exe
   **不能改成静态 import**，否则两边会同时启动抢端口。
 - **资产要落盘**：exe 里内嵌了前端 dist + node-pty 整个平台包，首次运行解压到 `~/.pi/pi-chamber/`。
   为什么不能只用内存：express.static 要真目录；node-pty 内部会 `fork(conpty_console_list_agent.js)`，那个 .js 必须在盘上。
+  （同一个 `PI_CHAMBER_HOME` 也放**全局设置文件** `pi-chamber-global-setting.json` —— 解压只删 `web/`、`native/` 两个子目录，碰不到它。）
 - **路径靠环境变量注入**：打包版由入口注入 `PI_CHAMBER_HOME` / `PI_CHAMBER_WEB_DIR` / `PI_CHAMBER_NATIVE_DIR`，
   五个模块只认环境变量、不认自己在不在 exe 里 —— 所以 **dev 跑源码时这些变量不存在，行为一字不变**。
   原因：`import.meta.url` 在 exe 里指向 exe 自己，所有“从文件位置往上推”的路径都会算错。
@@ -352,7 +354,7 @@ ws.onclose   = () => bus.detachTransport("ws closed");
 **载荷形状**（字段只在这里写一次；前端实现见 `web/src/stores/{sessions,chat}-store.js` 文件头注）：
 
 ```js
-// Setting（setting.sync）—— 全局设置，落 ~/.pi/pi-chamber-global-setting.json
+// Setting（setting.sync）—— 全局设置，落 ~/.pi/pi-chamber/pi-chamber-global-setting.json
 //   文件里还有 password / jwtSecret 两个字段，**永不下发**（toWire 剔掉）
 type Setting = {
   port,          // 服务端口（启动时读一次；改了要重启后端 —— 前端只负责设，不热更）

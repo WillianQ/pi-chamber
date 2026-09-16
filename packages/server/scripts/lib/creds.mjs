@@ -1,7 +1,8 @@
 // 冒烟脚本共用的登录凭据 —— 从**设置文件**读（不再有 .env，也不看环境变量）。
 //
 // 路径规则与 server 完全一致：PI_CHAMBER_SETTING 可覆盖（测试隔离），否则
-// ~/.pi/pi-chamber-global-setting.json。两处都写死一份是有意的 —— 冒烟脚本不该 import
+// <PI_CHAMBER_HOME>/pi-chamber-global-setting.json（默认 ~/.pi/pi-chamber/…；
+// 老位置 ~/.pi/ 下作为只读兜底）。两处都写死一份是有意的 —— 冒烟脚本不该 import
 // server 的 src（那会把整个服务端依赖树拖进来，而且 init() 会顺手建文件）。
 //
 // 用法：
@@ -10,9 +11,18 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 
-const FILE =
-  process.env.PI_CHAMBER_SETTING ||
-  path.join(os.homedir(), ".pi", "pi-chamber-global-setting.json");
+const FILE = process.env.PI_CHAMBER_SETTING || defaultSettingFile();
+
+/** 默认位置 = ~/.pi/pi-chamber/…；老位置（~/.pi/ 下）只在新的还没生成时兜底 */
+function defaultSettingFile() {
+  const dir = process.env.PI_CHAMBER_HOME || path.join(os.homedir(), ".pi", "pi-chamber");
+  const now = path.join(dir, "pi-chamber-global-setting.json");
+  const legacy = path.join(os.homedir(), ".pi", "pi-chamber-global-setting.json");
+  try {
+    if (!fs.existsSync(now) && fs.existsSync(legacy)) return legacy;
+  } catch {}
+  return now;
+}
 
 export function settingFile() {
   return FILE;

@@ -1,7 +1,9 @@
 // setting.js —— pi-chamber 全局设置：唯一真相 + 落盘 + 首次生成
 //
-// 文件：~/.pi/pi-chamber-global-setting.json
+// 文件：<PI_CHAMBER_HOME>/pi-chamber-global-setting.json
+//       默认 <PI_CHAMBER_HOME> = ~/.pi/pi-chamber（打包版由入口注入；dev 不设 → 走这个默认值）
 //       环境变量 PI_CHAMBER_SETTING 可覆盖路径 —— 冒烟/测试隔离用（否则跑一次测试就把生产密码改了）
+//       （老版本放在 ~/.pi/pi-chamber-global-setting.json，首次运行自动搬过来，见 migrateLegacyFile）
 //
 // 纪律（改本文件前先读）：
 //   ① 本文件是**纯存储层**：读盘 / 生成默认值 / 原子写盘。**不碰 bus** —— 广播归 setting-service.js。
@@ -22,9 +24,27 @@ import path from "node:path";
 import os from "node:os";
 import crypto from "node:crypto";
 
+const PI_DIR = process.env.PI_CHAMBER_HOME || path.join(os.homedir(), ".pi", "pi-chamber");
 const FILE =
-  process.env.PI_CHAMBER_SETTING ||
-  path.join(os.homedir(), ".pi", "pi-chamber-global-setting.json");
+  process.env.PI_CHAMBER_SETTING || path.join(PI_DIR, "pi-chamber-global-setting.json");
+
+/**
+ * 一次性迁移：老版本把设置文件直接放 ~/.pi/ 下（没有 pi-chamber 子目录）。
+ * 不搬的话用户的密码 / jwtSecret 会凭空消失（被当成首次运行、重生成默认值）。
+ * 只在没设 PI_CHAMBER_SETTING（= 测试/冒烟隔离）时动手。
+ */
+function migrateLegacyFile() {
+  if (process.env.PI_CHAMBER_SETTING) return;
+  const legacy = path.join(os.homedir(), ".pi", "pi-chamber-global-setting.json");
+  try {
+    if (fs.existsSync(FILE) || !fs.existsSync(legacy)) return;
+    fs.mkdirSync(path.dirname(FILE), { recursive: true });
+    fs.renameSync(legacy, FILE);
+    console.log(`[setting] 设置文件已迁移：${legacy} → ${FILE}`);
+  } catch {}
+}
+
+migrateLegacyFile();
 
 /** 首次生成时的默认密码 —— 必须让用户知道（启动时控制台打印），且公网暴露前必须改 */
 export const DEFAULT_PASSWORD = "demo123456";
