@@ -28,8 +28,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
 import { WebSocketServer } from "ws";
-import * as pty from "@lydell/node-pty";
+import { loadPty } from "./pty-loader.js";
 import { createSessions } from "./sessions.js";
+
+// node-pty 的取法因环境而异（dev 直 import / 打包版从解压目录 require），见 pty-loader.js
+const pty = await loadPty();
 
 const PKG_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const ROOT = path.resolve(PKG_DIR, "../..");
@@ -40,10 +43,13 @@ const PORT = (() => {
   const n = i >= 0 ? Number(process.argv[i + 1]) : NaN;
   return Number.isInteger(n) && n > 0 && n < 65536 ? n : 3002;
 })();
-const DATA_DIR = path.join(PKG_DIR, "data");
+// ★ 打包成 exe 后 import.meta.url 指向 exe 自己，上面那些相对路径全会算错 →
+//   打包版由入口注入 PI_CHAMBER_HOME，数据与日志统一落 <HOME>/{data,logs}。dev 不设，行为一字不变。
+const HOME = process.env.PI_CHAMBER_HOME;
+const DATA_DIR = HOME ? path.join(HOME, "data") : path.join(PKG_DIR, "data");
 const TOKEN_FILE = path.join(DATA_DIR, "token");
-// 日志统一落仓库根 logs/（与 chamber 的 server.log 同一处 —— 找日志只需看一个目录）
-const LOG_FILE = path.join(ROOT, "logs", "termd.log");
+// 日志与 chamber 的 server.log 同一处（找日志只需看一个目录）
+const LOG_FILE = HOME ? path.join(HOME, "logs", "termd.log") : path.join(ROOT, "logs", "termd.log");
 
 // ── 日志：控制台 + 写文件（照 server/logger.js 的 tee 做法，自带一份不依赖别人） ──
 // termd 只在生命周期事件（起 / 退出 / 连接）写，**不写终端输出流** —— 所以很小，不需轮转。

@@ -70,7 +70,35 @@ pnpm web-smoke                    # 前端 store 冒烟：Node 里跑真前端�
 pnpm termd start|stop|status|restart  # 终端守护进程（termd）；chamber 启动时也会自动探测并拉起
 pnpm termd-smoke                  # 终端域冒烟（直连 termd）：起/接管/回放/IO/resize/断开不杀/重连回放/名册
 pnpm term-smoke                   # 终端域冒烟（走 chamber 全链路）+ 前端 term-store 真代码消费活体帧
+pnpm build:exe                    # ★ 打成单文件 exe（前端 + 后端 + node-pty + node 运行时）→ build/dist/pi-chamber.exe
+pnpm icons                        # 重生图标（源图 pic/logo_512.png）—— 换了 logo 才需要
 ```
+
+### 打包成 exe（给非技术用户）
+
+**改了代码要出新版，一条命令**：
+
+```bash
+pnpm build:exe
+```
+
+产出 `build/dist/pi-chamber.exe`（~115 MB，**就这一个文件**，双击即用）。
+构建做五件事（见 `scripts/build-exe.mjs`）：前端 vite 构建 → 收集资产 → rolldown 打后端单文件 → Node SEA 合成 exe → 换图标。
+
+**用户侧**：双击 exe → 弹黑框打印访问地址 → 自己开浏览器。没有安装、没有图标、没有自启。
+
+关键设计（改打包相关代码前必读）：
+
+- **一个 exe 两个角色**（`scripts/sea-entry.mjs`）：无参数 = chamber（前台服务）；`--termd` = 终端守护进程
+  （chamber 自己 detached 拉起，见 termd/src/spawn.js）。两者靠 rolldown 保留的 `import()` 惰性分开加载 ——
+  **不能改成静态 import**，否则两边会同时启动抢端口。
+- **资产要落盘**：exe 里内嵌了前端 dist + node-pty 整个平台包，首次运行解压到 `~/.pi/pi-chamber/`。
+  为什么不能只用内存：express.static 要真目录；node-pty 内部会 `fork(conpty_console_list_agent.js)`，那个 .js 必须在盘上。
+- **路径靠环境变量注入**：打包版由入口注入 `PI_CHAMBER_HOME` / `PI_CHAMBER_WEB_DIR` / `PI_CHAMBER_NATIVE_DIR`，
+  五个模块只认环境变量、不认自己在不在 exe 里 —— 所以 **dev 跑源码时这些变量不存在，行为一字不变**。
+  原因：`import.meta.url` 在 exe 里指向 exe 自己，所有“从文件位置往上推”的路径都会算错。
+- **node-pty 的取法因环境而异**：见 `packages/termd/src/pty-loader.js`（dev 直 import；打包版从解压目录 require）。
+- **SEA 限制**：`useCodeCache` 必须关（开了动态 `import()` 会抛）；SEA 里的代码默认**不能从磁盘加载模块**（只能内置模块）→ 必须 `createRequire`。
 
 工作流注意：
 
@@ -110,10 +138,11 @@ pi-chamber/
 ├── .npmrc                     # node-linker=hoisted（隔离式 node_modules 会破坏扩展 require 约定，勿改）
 ├── AGENTS.md  README.md  README.CH.md  LICENSE
 ├── pnpm-lock.yaml
-├── tts文档/                    # 语音（STT/TTS）对接文档
-├── .pi/                       # 本仓的 agent 定义（不要动）
+├── build/                     # ★ 打包产物（**整个目录 gitignore**）：gen/ 生成物 · out/ 中间件 · dist/pi-chamber.exe
 ├── scripts/bg.mjs             # 后台启停控制器：detached 起 `node src/server.js`（端口取自设置文件，强制注入），
 │                              #   pid 落 logs/bg.pid（gitignored）；根目录 bg-start.bat / bg-stop.bat / bg-status.bat 是双击入口
+├── scripts/build-exe.mjs      # ★ 打包脚本：前端 vite → 收集资产 → rolldown 打后端单文件 → Node SEA 合成 exe → 换图标
+├── scripts/sea-entry.mjs      # ★ exe 入口：一个 exe 两角色（chamber / --termd）+ 首次运行解压资产
 ├── logs/                      # ★ 所有运行期日志集中于此（gitignored）：
 │                              #   server.log（dev 全量；启动清空）· server.err.log（生产 stderr）
 │                              #   termd.log · termd.boot.log（每次拉起 termd 的记录）· bg.pid
@@ -157,6 +186,9 @@ pi-chamber/
         ├── package.json
         ├── vite.config.js     #   5173，代理 /api /ws → 3001
         ├── index.html
+        ├── public/            #   静态原样拷贝到 dist 根（Vite 约定）：favicon.ico / apple-touch-icon.png /
+        │                      #   icon-192·512.png / icon-maskable-512.png / manifest.webmanifest
+        │                      #   ★ 这些是构建产物，直接改不生效；源图与生成方式见仓库历史的 make-icons.py
         └── src/
             ├── main.jsx  App.jsx（登录门控）  index.css
             ├── bus.js              # 前端总线单例 + 连接生命周期

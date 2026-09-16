@@ -12,6 +12,7 @@
     "start": "pnpm --dir packages/server start",
     "bg": "node scripts/bg.mjs",
     "build": "pnpm --dir packages/web build",
+    "build:exe": "node scripts/build-exe.mjs",
     "test": "pnpm --dir packages/server test && pnpm --dir packages/termd test",
     "smoke": "pnpm --dir packages/server smoke",
     "agent-smoke": "pnpm --dir packages/server agent-smoke",
@@ -22,5 +23,8 @@
     "termd": "node packages/termd/scripts/termd.mjs",
     "term-smoke": "pnpm --dir packages/server term-smoke",
     "termd-smoke": "pnpm --dir packages/termd smoke"
+  },
+  "devDependencies": {
+    "resedit": "^3.1.0"
   }
 }

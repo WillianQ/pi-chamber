@@ -5,3 +5,6 @@ dist/
 .restart-logs/
 data/
 .pi/SYSTEM.md
+
+# 打包产物：整个目录不进仓（构建源码在 scripts/build-exe.mjs + scripts/sea-entry.mjs）
+build/

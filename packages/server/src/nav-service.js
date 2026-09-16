@@ -256,8 +256,13 @@ async function nameClash(dir, name, exceptName) {
 
 // ── 状态（内存唯一真相，变更即落盘） ─────────────────────────────────────────
 
+// ★ 打包成 exe 后 import.meta.url 指向 exe 自己（相对路径会落到 exe 旁边）→
+//   打包版由入口注入 PI_CHAMBER_HOME，数据统一落 <HOME>/data。dev 不设，行为一字不变。
 const STATE_FILE =
-  process.env.NAV_STATE_FILE || fileURLToPath(new URL("../data/nav-state.json", import.meta.url));
+  process.env.NAV_STATE_FILE ||
+  (process.env.PI_CHAMBER_HOME
+    ? path.join(process.env.PI_CHAMBER_HOME, "data", "nav-state.json")
+    : fileURLToPath(new URL("../data/nav-state.json", import.meta.url)));
 // ★ 路径可被 env 覆盖：e2e 测试用它指到临时目录。否则多个测试实例共享同一个
 //   data/nav-state.json —— 上个测试留下的 current 指向已删目录，下一个测试启动时
 //   fs.watch 就挂载失败（实测：bus-e2e 的日志里出现 fsops-e2e 的临时目录名）。

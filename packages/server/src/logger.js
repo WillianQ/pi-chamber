@@ -11,9 +11,14 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
-// 默认落仓库根 logs/server.log；LOG_FILE 可覆盖 —— e2e 测试用它指到临时目录，
+// ★ 打包成 exe 后 import.meta.url 指向 exe 自己，「往上三层」会跑到 exe 外面去 →
+//   打包版由入口注入 PI_CHAMBER_HOME，日志改落 <HOME>/logs。dev 不设这个变量，行为一字不变。
+const LOG_DIR = process.env.PI_CHAMBER_HOME
+  ? join(process.env.PI_CHAMBER_HOME, "logs")
+  : join(ROOT, "logs");
+// 默认落 logs/server.log；LOG_FILE 可覆盖 —— e2e 测试用它指到临时目录，
 // 免得测试进程（带 LOG=1）把 dev 正在写的那份清空
-const LOG_FILE = process.env.LOG_FILE ? resolve(process.env.LOG_FILE) : join(ROOT, "logs", "server.log");
+const LOG_FILE = process.env.LOG_FILE ? resolve(process.env.LOG_FILE) : join(LOG_DIR, "server.log");
 export { LOG_FILE };
 
 if (process.env.LOG === "1") {
