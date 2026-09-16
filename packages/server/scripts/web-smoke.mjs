@@ -3,7 +3,7 @@
 //
 // 为什么要它：前端两个 store 全是"收帧 → 写状态"，逻辑错了要在浏览器里肉眼找；这里直接把活体帧喂进去断言。
 // Node 缺浏览器 API → 进门前打好桩（localStorage / location）。
-import "dotenv/config";
+import { selfSign } from "./lib/creds.mjs";
 
 // ── 浏览器 API 桩（必须在 import 前端代码之前）──
 const store = new Map();
@@ -37,7 +37,7 @@ async function until(fn, ms = 60000, every = 100) {
   }
 }
 
-const token = jwt.sign({ sub: "owner" }, process.env.JWT_SECRET, { expiresIn: "10m" });
+const token = selfSign(jwt);
 connect(token);
 await until(() => useConnStore.getState().state === "online", 8000);
 step("WS 连上（bus 在线）", useConnStore.getState().state === "online");

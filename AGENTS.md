@@ -55,7 +55,7 @@ pi-chamber 是一个**远程、跨平台的 agent 监控操作界面**：chamber
 
 ```bash
 pnpm install                      # workspace 根一次装完四包（node-linker=hoisted，见 .npmrc）
-cp packages/server/.env.example packages/server/.env   # 填 JWT_SECRET + PASSWORD
+# 无需配置任何文件：首次启动自动生成 ~/.pi/pi-chamber-global-setting.json（随机 jwtSecret + 默认密码 demo123456）
 
 pnpm dev                          # 同时起后端 3001 + 前端 5173（--stream 前缀区分两包日志）
 pnpm test                         # node --test，自起 3996~3999 独立实例，不碰 3000/3001
@@ -74,7 +74,8 @@ pnpm term-smoke                   # 终端域冒烟（走 chamber 全链路）+ 
 
 工作流注意：
 
-- 后端 3001 的 dev 是 `node --watch` 自重启，监听 `packages/server/src/`、`packages/bus/`、`.env`。**不要自己启/杀服务**；验证靠"改代码 → 等服务自动重启 → 冒烟脚本打 3001 → `tail logs/server.log`"。
+- 后端 3001 的 dev 是 `node --watch` 自重启，监听 `packages/server/src/`、`packages/bus/`。**不要自己启/杀服务**；验证靠"改代码 → 等服务自动重启 → 冒烟脚本打 3001 → `tail logs/server.log`"。
+  （dev 端口靠 `cross-env PORT=3001` 注入 —— setting.js 只把 `PORT` 环境变量当**覆盖值**，不落盘；生产没有这个变量，端口以设置文件为准。）
 - **日志策略（位置统一在仓库根 `logs/`）**：
   | 模式 | 文件日志 | stdout | stderr |
   |---|---|---|---|
@@ -84,17 +85,21 @@ pnpm term-smoke                   # 终端域冒烟（走 chamber 全链路）+ 
   路径一律**从文件位置算**（`import.meta.url` 往上推），不用 `resolve("logs",…)` —— 那是相对 cwd，从哪启动就落哪（曾在仓库根留过一个十天前的僵尸日志）。
 - 冒烟脚本默认 cwd 是 `packages/server` 自身目录——**不是 agent space**；要打真实 agent 目录请传参：`pnpm run agent-smoke -- <cwd>`（`web-smoke` 同理）。
 - 终端归 **termd**：`pnpm dev` 的后端自重启（`node --watch`）**不杀终端**（PTY 不在它手里）；想清空终端用 `pnpm termd restart`。反过来，`packages/server/src/*` 改动会让 chamber 重启，前端自动重连并重新接管屏幕（回放断线期间的输出）——这是设计好的，不是 bug。
-- 冒烟脚本登录：优先 `.env` 的 `PASSWORD` 打 `/api/login`；没有就临时用 `JWT_SECRET` 自签 token（不阻塞冒烟）。
+- 冒烟脚本登录：从**设置文件**读 `password` 打 `/api/login`；拿不到就退回用 `jwtSecret` 自签 token（不阻塞冒烟）。
+  共用助手在 `packages/server/scripts/lib/creds.mjs`；测试要隔离就设 `PI_CHAMBER_SETTING=<临时文件>`。
 - 前端无 mock：联调靠起 dev（5173）连活体后端；vite 代理了 `/api` 与 `/ws`，同源无 CORS。
 
 ### 2.5 安全提示
 
-- `.env`、`logs/`、`dist/` 已 gitignore。
+- `logs/`、`dist/`、`packages/termd/data/` 已 gitignore。设置文件在 `~/.pi/` 下（家目录，本来就不进仓）。
 - JWT 无状态、无撤销：登出 = 前端丢 token；7d TTL 内 token 被偷仍有效（单用户可接受，加黑名单是后话）。
-- **登录密码在 `.env` 里存明文**（`PASSWORD`，与 `JWT_SECRET` 同处，gitignored）。不存哈希 —— 单用户自用、`.env` 从不外流，哈希那套（bcrypt + `hash-password` 工具）属于多余工序，已删。同理：`.env` 一旦泄露，密码和签名密钥一起丢，哈希也救不了。
+- **登录密码在设置文件里存明文**（`password`）。不存哈希 —— 单用户自用、文件不外流，哈希那套（bcrypt + `hash-password` 工具）属于多余工序，已删。同理：文件一旦泄露，密码和签名密钥一起丢，哈希也救不了。
+  **首次启动生成的默认密码是 `demo123456`（公开可猜）** → 启动时控制台会打印提醒，公网暴露前必须改。
+- **`jwtSecret` / `password` 永不下发前端**：`setting.sync` 里剔掉（见 setting.js 的 `toWire`）。jwtSecret 是签名密钥，给了前端 = 谁都能自己签 token；密码前端只需要"设置"、不需要"读到"。
+  （教训：环境变量只能覆盖 `PORT`，**绝不覆盖 password/jwtSecret** —— 机器上任何同名环境变量都会静默顶掉设置文件，且曾经被误写回文件。）
 - WS token 走 query string 会进代理访问日志（硬化项：改 Sec-WebSocket-Protocol 头，会动所有冒烟脚本，暂缓）。
 - 公网部署：前置 Caddy/nginx TLS（wss://）；若前端独立域名托管，后端需加 `ALLOW_ORIGIN` CORS 白名单（当前同源代理/托管，无 CORS）。
-- **termd 不进公网**：它只绑 `127.0.0.1:3002`（端口由 chamber 从自己 `.env` 的 `TERMD_PORT` 读、以 `--port` 传给 termd；**termd 自身不读 env**），三层鉴权全在 `daemon.js` 里：① 非 loopback 拒 ② **带 `Origin` 头（= 浏览器发起的连接）一律拒** ③ token（随机 24 字节，落 `packages/termd/data/token`，gitignored；daemon 退出时删）。第 ② 条是关键：**loopback 不是安全边界** —— 没有它，你随手打开的一个被 XSS 的网页就能连 `ws://127.0.0.1:3002` 在本机开 shell（DNS rebinding 同理）。对外入口仍然只有 chamber 一个 —— 但请记住：拿到 token = 拿到这台机器的 shell。
+- **termd 不进公网**：它只绑 `127.0.0.1:3002`（端口由 chamber 从设置文件的 `termdPort` 读、以 `--port` 传给 termd；**termd 自身不读 env**），三层鉴权全在 `daemon.js` 里：① 非 loopback 拒 ② **带 `Origin` 头（= 浏览器发起的连接）一律拒** ③ token（随机 24 字节，落 `packages/termd/data/token`，gitignored；daemon 退出时删）。第 ② 条是关键：**loopback 不是安全边界** —— 没有它，你随手打开的一个被 XSS 的网页就能连 `ws://127.0.0.1:3002` 在本机开 shell（DNS rebinding 同理）。对外入口仍然只有 chamber 一个 —— 但请记住：拿到 token = 拿到这台机器的 shell。
 
 ## 3. 目录结构
 
@@ -107,7 +112,7 @@ pi-chamber/
 ├── pnpm-lock.yaml
 ├── tts文档/                    # 语音（STT/TTS）对接文档
 ├── .pi/                       # 本仓的 agent 定义（不要动）
-├── scripts/bg.mjs             # 后台启停控制器：detached 起 `node src/server.js`（端口取自 server/.env，强制注入），
+├── scripts/bg.mjs             # 后台启停控制器：detached 起 `node src/server.js`（端口取自设置文件，强制注入），
 │                              #   pid 落 logs/bg.pid（gitignored）；根目录 bg-start.bat / bg-stop.bat / bg-status.bat 是双击入口
 ├── logs/                      # ★ 所有运行期日志集中于此（gitignored）：
 │                              #   server.log（dev 全量；启动清空）· server.err.log（生产 stderr）
@@ -131,9 +136,10 @@ pi-chamber/
     │   └── logs 不再有         #   日志统一在仓库根 logs/（见上）
     ├── server/                # @pi-chamber/server：Express + WS
     │   ├── package.json
-    │   ├── .env / .env.example          # .env 从 example 拷贝后填（gitignored）
-    │   ├── src/               #   框架件 + 五个 Service 全平铺；Agent 域是唯一的文件夹
-    │   │   ├── server.js  app.js  auth.js  config.js  logger.js  bus.js  ws.js   # 框架件
+    │   ├── src/               #   框架件 + 六个 Service 全平铺；Agent 域是唯一的文件夹
+    │   │   ├── server.js  app.js  auth.js  setting.js  logger.js  bus.js  ws.js   # 框架件
+    │   │   │   # setting.js = 全局设置的**纯存储层**（读盘/校验/原子写/toWire），不碰 bus
+    │   │   ├── setting-service.js      # Setting 域：收 setting.update + 推 setting.sync（连接时 / 变更后）
     │   │   ├── agent-service/          # Agent 域（唯一带子目录的：体量最大；各文件职责见文件头注）
     │   │   │   ├── index.js            #   名册表 + 焦点 activeId + 名册目录 cwd + 事件桥 + 生命周期 + prompt/abort + 翻页/补全 + 呆滞清理
     │   │   │   ├── commands.js         #   / 命令域（孤岛：不吃表不读焦点不摸 bus）
@@ -255,6 +261,9 @@ ws.onclose   = () => bus.detachTransport("ws closed");
 
 | 事件 | 类型 | 发出参数 | 返回参数 | 功能说明 |
 |-|-|-|-|-|
+| `setting.sync` | emit(s→w) | `{port, termdPort, tts:{enabled, dashscopeApiKey, voice, rate}, stt:{enabled, dashscopeApiKey}}` | — | 全局设置全量：连接时 + 每次变更后。**剔掉 `jwtSecret` / `password`**（服务端私有，前端只需要"设置"、不需要"读到"）。前端只做两件事：存下来（谁要谁读）+ 把改动 emit 上去 |
+| `setting.update` | emit(w→s) | `{ 变化的字段 }`（如 `{tts:{enabled:true}}`） | — | 改设置：服务端做**白名单深合并** → 校验 → 原子落盘 → 推 `setting.sync`。**无回执**；脏字段直接丢不落盘 |
+| `setting.notice` | emit(s→w) | `{type:"error", message}` | — | 保存失败（校验不过 / 写盘失败）。**随后的 `setting.sync` 是旧真值** → 前端据此自动回滚 UI |
 | `agent.sessions.sync` | emit(s→w) | `{agents, selectedCwd, sessions}` | — | 名册全量：连接 / 换目录。`agents:[{cwd, basename, sessionCount}]`；`sessions:[{id, cwd, name, updateTime, messageCount, status, isSubAgent, parentId}]`（只含 `selectedCwd` 这一个目录的场次） |
 | `agent.sessions.patch` | emit(s→w) | `{agents?, rows?}` | — | 名册增量：其余所有名册变化（**不分焦点**，后台出勤的灯/条数也要动）。`rows` 元素 `{id, cwd, status?, messageCount?, updateTime?, name?, isSubAgent?, parentId?, deleted?}`；`agents` 按 cwd 合并 |
 | `agent.sessions.list` | emit(w→s) | `{cwd}` | — | 换目录（Agent 下拉）：服务端记下名册目录 `cwd` 并重推 sync；不动焦点，无失败路径 |
@@ -308,6 +317,23 @@ ws.onclose   = () => bus.detachTransport("ws closed");
 | `term.exit` | emit(s→w) | `{termId, code, signal}` | — | PTY **自己**退出（敲 exit / 崩溃），**必到一次**，广播给所有连接；会话**不删档**（屏幕还在、还能重连），只有 close 才出列。用户主动 close 的不发这条（区分"我关的"与"它自己死的"） |
 
 **载荷形状**（字段只在这里写一次；前端实现见 `web/src/stores/{sessions,chat}-store.js` 文件头注）：
+
+```js
+// Setting（setting.sync）—— 全局设置，落 ~/.pi/pi-chamber-global-setting.json
+//   文件里还有 password / jwtSecret 两个字段，**永不下发**（toWire 剔掉）
+type Setting = {
+  port,          // 服务端口（启动时读一次；改了要重启后端 —— 前端只负责设，不热更）
+  termdPort,     // termd 端口（同上）
+  tts: { enabled, dashscopeApiKey, voice, rate },  // 朗读
+  stt: { enabled, dashscopeApiKey }                // 识别（与朗读各自一把 key，可填同一把）
+}
+// 谁读它、什么时候读（三类，见 setting.js 纪律②）：
+//   ① 用时现读：app.js(密码) / auth.js(jwtSecret) / tts·stt(key/voice/rate)
+//   ② 启动读一次：server.js(port) / term-service.js(termdPort) —— 改了要重启
+//   ③ 订阅 setting.sync：只有 tts-service / stt-service —— 且**只管"关掉"**（掐掉在途会话/任务），
+//      其余（key 变了、音色变了）下一轮现读自然生效，不需要通知
+// ★ 没有 onChange、没有本地缓存层：广播就是 setting.sync，前后端同一份帧
+```
 
 ```js
 // 行（名册）—— status 五值全可能；chat 只用 idle/pending/running/compacting

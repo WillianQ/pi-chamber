@@ -8,4 +8,5 @@ export { useEditorStore } from "./editor-store.js";
 export { useUIStore } from "./ui-store.js";
 export { useSTTStore } from "./stt-store.js";
 export { useTTSStore } from "./tts-store.js";
+export { useSettingStore, settingActions, currentSetting } from "./setting-store.js";
 export { useTermStore, termActions, registerSink, unregisterSink } from "./term-store.js";

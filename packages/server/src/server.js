@@ -1,6 +1,5 @@
 import "./logger.js"; // 必须最先引入：接管 console 输出到日志文件
 import http from "node:http";
-import { config } from "./config.js";
 import app from "./app.js";
 import { attachWs, installUpgradeAuth } from "./ws.js";
 import { bus } from "./bus.js";
@@ -10,6 +9,22 @@ import { installEditorService } from "./editor-service.js";
 import { installSttService } from "./stt-service.js";
 import { installTtsService } from "./tts-service.js";
 import { installTermService } from "./term-service.js";
+import {
+  init as initSetting,
+  get as getSetting,
+  filePath as settingFile,
+  DEFAULT_PASSWORD,
+} from "./setting.js";
+import { installSettingService } from "./setting-service.js";
+
+// —— Setting 域（全局设置：密码 / 密钥 / 端口 / 语音）——
+// ★ 必须最先 init：port 与 termdPort 只有启动时读一次（改了要重启后端），其余消费者全是现读。
+//   首次启动会生成 jwtSecret（随机）+ password（demo123456）并落盘，见 setting.js。
+const boot = initSetting();
+console.log(`[setting] 配置文件：${settingFile()}`);
+if (boot.freshPassword) {
+  console.log(`[setting] 首次生成的登录密码：${DEFAULT_PASSWORD}（请尽快在「设置 → 账号」里改掉）`);
+}
 
 // —— 业务 handler：启动时注册一次，与进程同寿（bus 是单例，不再关心是谁的连接）——
 bus.on("$conn.open", (p) => {
@@ -29,6 +44,9 @@ bus.on("whoami", async () => {
   throw new Error("not implemented yet");
 });
 
+// —— Setting 域（全局设置）：收 setting.update + 推 setting.sync（连接时 / 变更后）——
+installSettingService(bus);
+
 // —— Agent 域：名册（sessions.sync/patch）+ 焦点对话（chat.sync/message/delta/notice）——
 installAgentService(bus);
 
@@ -39,10 +57,10 @@ installNavService(bus);
 installEditorService(bus);
 
 // —— STT 域（语音输入）：stt.audio/stt.end 缓冲管道 + partial/final/error 翻译 ——
-installSttService(bus, config);
+installSttService(bus);
 
 // —— TTS 域（语音输出）：tts.speak 会话 + audio/end 推送 + finish/stop 收尾 + break 测试口 ——
-installTtsService(bus, config);
+installTtsService(bus);
 
 // —— Term 域（终端）：帧桥接到独立守护进程 termd（PTY 归它，chamber 重启不杀终端）——
 installTermService(bus);
@@ -51,8 +69,8 @@ const server = http.createServer(app);
 const wss = attachWs(server);
 installUpgradeAuth(server, wss, "/ws");
 
-server.listen(config.port, () => {
+server.listen(getSetting().port, () => {
   console.log(
-    `HTTP/WS 服务已启动: http://localhost:${config.port} (WS 路径 /ws, bus 单例在线)`
+    `HTTP/WS 服务已启动: http://localhost:${getSetting().port} (WS 路径 /ws, bus 单例在线)`
   );
 });

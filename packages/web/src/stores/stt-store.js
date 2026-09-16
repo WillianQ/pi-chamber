@@ -247,3 +247,13 @@ bus.on("$conn.close", () => {
     useSTTStore.setState({ isRecording: false, listening: false, partialText: "", error: "连接断开，语音已取消" });
   }
 });
+// 识别开关被关掉（设置页）→ 停录（不发 end：后端在途任务由它自己的 setting.sync 拾掉）
+bus.on("setting.sync", (s) => {
+  if (s?.stt?.enabled) return;
+  const cur = useSTTStore.getState();
+  if (!cur.isRecording) return;
+  _onFinal = null;
+  teardownCollect();
+  pending = [];
+  useSTTStore.setState({ isRecording: false, listening: false, partialText: "", error: null });
+});

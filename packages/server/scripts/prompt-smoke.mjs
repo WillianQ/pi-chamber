@@ -2,7 +2,7 @@
 // 用法: node scripts/prompt-smoke.mjs ["想说的话"]        （真写盘，用完即删幽灵）
 //
 // 断言的是"帧语义"，不是"模型说了什么"：草稿出生 → 增量入格 → 终稿整条替换 → status 归 idle。
-import "dotenv/config";
+import { getToken } from "./lib/creds.mjs";
 import WebSocket from "ws";
 import jwt from "jsonwebtoken";
 import { resolve } from "node:path";
@@ -19,26 +19,8 @@ const step = (name, ok, extra = "") => {
   ok ? pass++ : fail++;
 };
 
-// ── 连接（明文密码优先；没有就 JWT_SECRET 自签）──
-let token = null;
-if (process.env.PASSWORD) {
-  try {
-    const r = await fetch(`${BASE}/api/login`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password: process.env.PASSWORD }),
-    });
-    token = (await r.json())?.token ?? null;
-  } catch {}
-}
-if (!token) {
-  if (!process.env.JWT_SECRET) {
-    console.error("拿不到登录凭据（.env 无 PASSWORD 也无 JWT_SECRET）");
-    process.exit(1);
-  }
-  token = jwt.sign({ sub: "owner" }, process.env.JWT_SECRET, { expiresIn: "10m" });
-  console.log("（用 JWT_SECRET 自签 token）");
-}
+// ── 连接（凭据从设置文件读：先试密码登录，失败就 jwtSecret 自签）──
+const token = await getToken(BASE, jwt);
 const ws = new WebSocket(`${BASE.replace("http", "ws")}/ws?token=${token}`);
 const bus = createBus({ requestTimeout: 30000 });
 ws.on("open", () => bus.attachTransport(nodeTransport(ws)));

@@ -1,6 +1,6 @@
 // 冒烟测试：直接打正在运行的服务（不自启进程），走完整 bus 协议
 // 用法: npm run smoke   |  换地址: BASE=http://localhost:3001 npm run smoke（dev 活体；生产 3000 可 BASE 指定）
-import "dotenv/config";
+import { readSetting, settingFile } from "./lib/creds.mjs";
 import WebSocket from "ws";
 import { stat, readFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
@@ -9,12 +9,13 @@ import { createBus } from "@pi-chamber/bus/core.js";
 import { nodeTransport } from "@pi-chamber/bus/transport-node.js";
 
 const BASE = process.env.BASE || "http://localhost:3001";
-const PASSWORD = process.env.SMOKE_PASSWORD || process.env.PASSWORD;
+// 登录密码从**设置文件**读（不再有 .env）；SMOKE_PASSWORD 可临时覆盖
+const PASSWORD = process.env.SMOKE_PASSWORD || readSetting()?.password;
 // 日志统一在仓库根 logs/（见 logger.js）；从脚本位置算，不依赖 cwd
 const LOG_FILE = join(resolve(dirname(fileURLToPath(import.meta.url)), "../../.."), "logs", "server.log");
 
 if (!PASSWORD) {
-  console.error("拿不到明文密码（.env 缺 PASSWORD？）；可用 SMOKE_PASSWORD=xxx npm run smoke");
+  console.error(`拿不到登录密码（设置文件 ${settingFile()} 里没有 password？）`);
   process.exit(1);
 }
 const step = (name, ok, extra = "") => {

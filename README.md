@@ -40,12 +40,13 @@ pi-chamber is a **remote control room** for the [pi coding agent](https://pi.dev
 
 ```bash
 pnpm install
-cp packages/server/.env.example packages/server/.env   # fill in JWT_SECRET + PASSWORD
+# No config files to create: the first start generates ~/.pi/pi-chamber-global-setting.json
+# (random jwtSecret + default password demo123456 — printed to the console on first boot)
 
 pnpm dev        # backend on 3001 (node --watch) + frontend on 5173 (vite HMR)
 ```
 
-Open <http://localhost:5173> → log in with your password → pick an Agent / create a Session → chat on the right.
+Open <http://localhost:5173> → log in with `demo123456` → **change it in Settings → Account**, then pick an Agent / create a Session → chat on the right.
 
 Production:
 
@@ -60,10 +61,10 @@ pnpm start      # backend on 3000, serving the frontend
 
 ### 1. Voice (STT / TTS) requires an Alibaba Cloud DashScope key
 
-Both hold-to-talk and read-aloud go through **Alibaba Cloud Bailian (DashScope)** realtime speech services and need a `DASHSCOPE_API_KEY`:
+Both hold-to-talk and read-aloud go through **Alibaba Cloud Bailian (DashScope)** realtime speech services and each needs its own key:
 
-- Put it in `packages/server/.env` (see `.env.example`)
-- **Without it**, the voice buttons do nothing (server log: `[stt] DASHSCOPE_API_KEY not configured`)
+- Turn the feature on and paste the key in **Settings → Read aloud** and **Settings → Speech recognition** (the two are configured independently — you can use the same key twice)
+- **Without it**, the voice buttons are hidden/do nothing
 - STT defaults to `fun-asr-realtime`; TTS defaults to `qwen-audio-3.0-tts-flash`
 - Get a key from the [Bailian console](https://bailian.console.aliyun.com/) (there is a free tier)
 
@@ -210,7 +211,9 @@ Logs live in `logs/` at the repo root (`dev` writes everything to `server.log`; 
 
 ## Security notes
 
-- Built for a single user: the login password is stored **in plain text** in `.env` (`PASSWORD`, next to `JWT_SECRET`, gitignored).
+- Built for a single user: the login password is stored **in plain text** in `~/.pi/pi-chamber-global-setting.json` (`password`, next to `jwtSecret`).
+  The default password on first boot is `demo123456` — **change it before exposing the server to a network**.
+- `jwtSecret` and `password` are **never sent to the frontend** (`setting.sync` strips them).
 - JWTs are stateless and non-revocable: logging out just means the frontend drops the token; a stolen token stays valid for its 7-day TTL. Acceptable for single-user use.
 - Public deployment: put Caddy / nginx in front for TLS (`wss://`) — which also satisfies the HTTPS requirement for voice input (see Caveats).
 - **termd never goes public**: it binds `127.0.0.1:3002` with three layers of auth — ① non-loopback rejected; ② **any connection carrying an `Origin` header (i.e. browser-initiated) is rejected**; ③ a token (24 random bytes, written to `packages/termd/data/token`). Getting that token means getting a shell on the machine.

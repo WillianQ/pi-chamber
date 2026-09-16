@@ -18,7 +18,7 @@
 //       ⑤ 子场用完即自动收工（行转 offline），且**收工≠销毁** —— 档案还在，点开还能回看
 //       ⑥ 子场有独立档案 jsonl（可回看）
 //   C 把配置改成 enabled:false → /reload → **热更生效**：模型立刻调不到 subagent（不用重开会话）
-import "dotenv/config";
+import { getToken } from "./lib/creds.mjs";
 import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -40,26 +40,8 @@ const step = (name, ok, extra = "") => {
   ok ? pass++ : fail++;
 };
 
-// ── 连接（明文密码优先；没有就 JWT_SECRET 自签）──
-let token = null;
-if (process.env.PASSWORD) {
-  try {
-    const r = await fetch(`${BASE}/api/login`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password: process.env.PASSWORD }),
-    });
-    token = (await r.json())?.token ?? null;
-  } catch {}
-}
-if (!token) {
-  if (!process.env.JWT_SECRET) {
-    console.error("拿不到登录凭据（.env 无 PASSWORD 也无 JWT_SECRET）");
-    process.exit(1);
-  }
-  token = jwt.sign({ sub: "owner" }, process.env.JWT_SECRET, { expiresIn: "10m" });
-  console.log("（用 JWT_SECRET 自签 token）");
-}
+// ── 连接（凭据从设置文件读：先试密码登录，失败就 jwtSecret 自签）──
+const token = await getToken(BASE, jwt);
 
 const bus = createBus({ requestTimeout: 30000 });
 const ws = new WebSocket(`${BASE.replace(/^http/, "ws")}/ws?token=${token}`);

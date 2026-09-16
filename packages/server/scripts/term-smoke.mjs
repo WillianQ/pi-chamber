@@ -6,7 +6,7 @@
 // 为什么要它：term-store 的逻辑错了要在浏览器里肉眼找；这里直接把活体帧喂进真 store 断言。
 //
 // Node 缺浏览器 API → 进门前打好桩（localStorage / location）。
-import "dotenv/config";
+import { selfSign } from "./lib/creds.mjs";
 
 // ── 浏览器 API 桩（必须在 import 前端代码之前）──
 const store = new Map();
@@ -42,11 +42,7 @@ const row = (id) => T().terms.find((t) => t.termId === id);
 console.log("── 终端域冒烟（chamber 全链路）──────────────");
 
 // ── 0. 连上 ────────────────────────────────────────────────────────────────
-if (!process.env.JWT_SECRET) {
-  console.error("拿不到 JWT_SECRET（packages/server/.env）");
-  process.exit(1);
-}
-connect(jwt.sign({ sub: "owner" }, process.env.JWT_SECRET, { expiresIn: "10m" }));
+connect(selfSign(jwt));
 await until(() => useConnStore.getState().state === "online", 8000);
 step("WS 连上（bus 在线）", useConnStore.getState().state === "online");
 if (useConnStore.getState().state !== "online") process.exit(1);

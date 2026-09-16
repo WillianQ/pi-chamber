@@ -10,6 +10,7 @@ import path from "node:path";
 import WebSocket from "ws";
 import { createBus } from "@pi-chamber/bus/core.js";
 import { nodeTransport } from "@pi-chamber/bus/transport-node.js";
+import { writeSettingFile } from "./lib/setting-fixture.mjs";
 
 const PORT = 3998;
 const BASE = `http://localhost:${PORT}`;
@@ -18,6 +19,8 @@ const TMP = await mkdtemp(path.join(os.tmpdir(), "pc-bus-e2e-"));
 const LOG_FILE = path.join(TMP, "server.log");
 // nav 状态也隔离：否则测试之间通过 data/nav-state.json 互相污染
 const NAV_STATE_FILE = path.join(TMP, "nav-state.json");
+// 设置也隔离：密码/密钥走临时文件（PI_CHAMBER_SETTING），不碰用户真实的 ~/.pi/...
+const SETTING_FILE = await writeSettingFile(TMP, PORT);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function startServer() {
@@ -25,8 +28,7 @@ function startServer() {
     env: {
       ...process.env,
       PORT: String(PORT),
-      JWT_SECRET: "test-secret",
-      PASSWORD: "test-password",
+      PI_CHAMBER_SETTING: SETTING_FILE, // 密码 / 密钥（不再走 JWT_SECRET / PASSWORD 环境变量）
       LOG: "1", // 让 logger 写文件（默认只有 dev 写）
       LOG_FILE, // 且写到临时目录
       NAV_STATE_FILE, // nav 状态也落临时目录（不碰 data/nav-state.json）

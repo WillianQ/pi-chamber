@@ -13,11 +13,12 @@
 // 帧名权威表见 AGENTS.md 4.2（term.* 九条）；本文件里字符串字面量与 daemon.js 各写一份（本仓惯例）。
 import WebSocket from "ws";
 import { ensureTermdRunning, readToken } from "@pi-chamber/termd/spawn.js";
-import { config } from "./config.js";
+import { get as getSetting } from "./setting.js";
 import { navState } from "./nav-service.js";
 
-// termd 端口：由 chamber 配置（.env 的 TERMD_PORT），拉起 termd 时显式传 --port → 两边必然一致。
-const PORT = config.termdPort;
+// termd 端口：由 chamber 设置（setting 的 termdPort），拉起 termd 时显式传 --port → 两边必然一致。
+// ★ 启动时读一次（installTermService 里赋值）—— 改了要重启后端，跟 port 同款规矩。
+let PORT = 3002;
 
 /** termd → 前端（下行：名册 / 输出 / 退出） */
 const DOWN = new Set(["term.list", "term.output", "term.exit"]);
@@ -27,6 +28,8 @@ const UP = new Set(["term.input", "term.resize", "term.close", "term.detach"]);
 const RPC = new Set(["term.create", "term.attach"]);
 
 export function installTermService(bus) {
+  PORT = getSetting().termdPort; // ★ 启动读一次（改了要重启后端）
+
   // cwdOf：新建终端的默认工作目录 = nav 域记的 cwd（它旁听 agent.chat.sync 维护，
   // 也就是"焦点 Session 所在的那台 agent 空间"）。没有焦点时 nav 的 cwd 为 null → termd 用自身 cwd。
   const cwdOf = () => navState().cwd;

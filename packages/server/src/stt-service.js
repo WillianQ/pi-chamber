@@ -21,8 +21,13 @@
 
 import WebSocket from "ws";
 import crypto from "node:crypto";
+import { get as getSetting } from "./setting.js";
 
 const DASHSCOPE_URL = "wss://dashscope.aliyuncs.com/api-ws/v1/inference";
+
+/** 识别设置现读 —— 不缓存。设置只在“前端推着走”时才被读（见 setting.js 纪律②），
+ *  所以 key 改了 / 开关改了，下一块音频自然生效，无需任何同步机制。 */
+const sttCfg = () => getSetting().stt;
 
 // —— 模块级状态（单例服务，进程与 bus 同寿）——
 let dashWs = null; // 与阿里的 ws（Node 侧客户端，无 CORS）
@@ -34,7 +39,6 @@ let audioBuf = []; // task-started 前积压的音频 Buffer[]（保险箱）
 let ended = false; // 本轮已收 stt.end（started 到达后补发 finish-task）
 let finalBuf = ""; // 本轮所有 sentence_end 句子拼接的最终文本
 let noKeyWarned = false; // 未配置 key 只提示一次，别每块音频都刷
-let apiKey = ""; // 由 installSttService 注入（模块级，供各收发函数用）
 
 function sttJson() {
   return {
@@ -71,7 +75,7 @@ function connectDash(bus) {
 
   dashConnecting = true;
   const ws = new WebSocket(DASHSCOPE_URL, {
-    headers: { Authorization: `Bearer ${apiKey}`, "user-agent": "pi-chamber-server" },
+    headers: { Authorization: `Bearer ${sttCfg().dashscopeApiKey || ""}`, "user-agent": "pi-chamber-server" },
   });
   dashWs = ws;
 
@@ -175,18 +179,19 @@ function onDashMessage(bus, data) {
 }
 
 // —— bus 注册（唯一出口）——
-export function installSttService(bus, config) {
-  apiKey = config?.dashscopeApiKey || "";
-  if (!apiKey) console.error("[stt] 未配置 DASHSCOPE_API_KEY，语音识别不可用");
+export function installSttService(bus) {
+  if (!sttCfg().dashscopeApiKey) console.log("[stt] 未配置百炼 key（可在「设置 → 识别」里填）");
 
   // 前端录音音频块：首块隐式开任务，其余入保险箱/直发
   bus.on("stt.audio", (payload) => {
     const chunk = payload?.chunk;
     if (!chunk) return;
-    if (!apiKey) {
+    const cfg = sttCfg();
+    if (!cfg.enabled) return; // 开关关着 → 静默丢（前端不该发；发了也不报错，免得刷屏）
+    if (!cfg.dashscopeApiKey) {
       if (!noKeyWarned) {
         noKeyWarned = true;
-        emitError(bus, "语音识别未配置（缺少 DASHSCOPE_API_KEY）");
+        emitError(bus, "语音识别未配置（请在「设置 → 识别」里填百炼 key）");
       }
       return;
     }
@@ -233,5 +238,14 @@ export function installSttService(bus, config) {
       dashConnecting = false;
       console.log("[stt] 浏览器断线，清理在途语音任务");
     }
+  });
+
+  // 设置变了：只需处理“关掉”这一件 —— 其余（key / enabled）下一块音频现读即生效。
+  // （这是全仓唯一“后端跟着设置变”的地方：前端关开关时，后端得把在途任务丢掉）
+  bus.on("setting.sync", (s) => {
+    if (s?.stt?.enabled) return;
+    if (!curTaskId) return;
+    console.log("[stt] 识别被关闭 → 丢弃在途任务");
+    resetTask();
   });
 }

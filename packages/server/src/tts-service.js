@@ -23,22 +23,26 @@
 //       会话中·未出过 audio → 自动换新 task_id 重连 + 整段重放缓存 texts（前端无感，只重试一次）
 //   - 厂商约束后端兜：continue-task 单次 ≤20000 字符，超长自动切段逐段发。
 //     阿里 task_id 是会话内唯一锚：迟到旧任务帧按 task_id 不符丢弃。
-//   - 音频格式：PCM16 单声道，sample_rate 由 config 定（默认 22050），speak 回执携带供前端建 AudioContext。
+//   - 音频格式：PCM16 单声道，sample_rate 硬编码 22050，speak 回执携带供前端建 AudioContext。
 //   - stop 兜底：发 cancel 后 3s 阿里未回 task-finished → 强收束 end{cancelled}（用户要求 stop 必回 end）。
 //     缺口/待办：finish（正常 flush）没有兜底计时器，极罕见阿里不回 task-finished 时会悬挂到连接断开。
 import WebSocket from "ws";
 import crypto from "node:crypto";
+import { get as getSetting } from "./setting.js";
 
 const URL = "wss://dashscope.aliyuncs.com/api-ws/v1/inference";
 const CHUNK_LIMIT = 20000; // continue-task 单次文本上限（字符）
 const STOP_TIMEOUT = 3000; // stop 后等阿里 task-finished 的兜底
 
-// —— 配置（installTtsService 注入）——
-let apiKey = "";
-let model = "";
+// —— 配置 ——
+// model / sampleRate 硬编码（设置项里没有它们，见 setting.js 字段表）；apiKey / voice / rate 走设置。
+const MODEL = "qwen-audio-3.0-tts-flash";
+const SAMPLE_RATE = 22050;
+
+// 当前会话的语音参数：run-task 一发出就定死，中途改不了 ——
+// 所以开新会话时从设置**现读一次**（设置页改了 → 下个会话生效）
 let voice = "";
-let sampleRate = 22050;
-let rate = 1.0; // 当前会话创建语速（run-task 定死；speak 可带新值，下个会话生效）
+let rate = 1.0;
 
 // —— 与阿里的连接（进程级单例，TTS 专用）——
 let dashWs = null;
@@ -63,12 +67,12 @@ function ttsJson() {
       task_group: "audio",
       task: "tts",
       function: "SpeechSynthesizer",
-      model,
+      model: MODEL,
       parameters: {
         text_type: "PlainText",
         voice,
         format: "pcm",
-        sample_rate: sampleRate,
+        sample_rate: SAMPLE_RATE,
         rate,
       },
       input: {},
@@ -143,7 +147,7 @@ function connectDash(bus) {
 
   dashConnecting = true;
   const ws = new WebSocket(URL, {
-    headers: { Authorization: `Bearer ${apiKey}`, "user-agent": "pi-chamber-server" },
+    headers: { Authorization: `Bearer ${getSetting().tts.dashscopeApiKey || ""}`, "user-agent": "pi-chamber-server" },
   });
   dashWs = ws;
 
@@ -256,37 +260,23 @@ function onDashMessage(raw, isBinary, bus) {
 }
 
 // —— bus 注册（唯一出口）——
-export function installTtsService(bus, config) {
-  apiKey = config.dashscopeApiKey || "";
-  model = config.tts?.model || "qwen-audio-3.0-tts-flash";
-  voice = config.tts?.voice || "longanlingxi";
-  sampleRate = config.tts?.sampleRate || 22050;
-  rate = config.tts?.rate || 1.0;
-  if (!apiKey) console.error("[tts] 未配置 DASHSCOPE_API_KEY，语音合成不可用");
+export function installTtsService(bus) {
+  if (!getSetting().tts.dashscopeApiKey) console.log("[tts] 未配置百炼 key（可在「设置 → 朗读」里填）");
 
   // speak（request）：文本进当前会话；无会话 → 开新 run-task；会话中 → continue-task 追加。受理即回
   bus.on("tts.speak", async (payload) => {
-    if (!apiKey) throw new Error("语音合成未配置（缺少 DASHSCOPE_API_KEY）");
+    const cfg = getSetting().tts; // ★ 现读：开关 / key / 音色 / 语速都在这里
+    if (!cfg.enabled) throw new Error("朗读未开启（在「设置 → 朗读」里打开）");
+    if (!cfg.dashscopeApiKey) throw new Error("语音合成未配置（在「设置 → 朗读」里填百炼 key）");
     const text = String(payload?.text ?? "").trim();
     if (!text) throw new Error("空文本：没东西可念");
     if (taskId && phase !== "running") throw new Error("上一段正在收尾，请稍候再试");
-    // 语速随 speak 携带（0.5~2.0）：run-task 定死会话参数，中途改只影响下个新会话
-    const want = Number(payload?.rate);
-    if (Number.isFinite(want)) {
-      const clamped = Math.min(2, Math.max(0.5, want));
-      if (clamped !== rate) console.log(`[tts] 语速调整 ${rate} → ${clamped}（下个会话生效）`);
-      rate = clamped;
-    }
-    // 音色同理：run-task 参数，随 speak 携带，下个会话生效
-    const wantVoice = String(payload?.voice ?? "").trim();
-    if (wantVoice && wantVoice !== voice) {
-      console.log(`[tts] 音色调整 ${voice} → ${wantVoice}（下个会话生效）`);
-      voice = wantVoice;
-    }
 
     const segs = chunkText(text);
     if (!taskId) {
-      // 开新会话
+      // 开新会话：语音参数在此刻定死（run-task 之后改不了）——现读设置
+      voice = cfg.voice;
+      rate = cfg.rate;
       taskId = crypto.randomUUID();
       taskStarted = false;
       phase = "running";
@@ -309,7 +299,7 @@ export function installTtsService(bus, config) {
       }
       console.log(`[tts] 追加 ${segs.length} 段文本（累计 ${texts.join("").length} 字符）`);
     }
-    return { ok: true, sampleRate };
+    return { ok: true, sampleRate: SAMPLE_RATE };
   });
 
   // finish（emit）：正常收尾。flush 阿里缓存尾句，剩余 audio 照常推完 → task-finished → end done
@@ -373,5 +363,14 @@ export function installTtsService(bus, config) {
     }
   });
 
-  console.log(`[tts] 语音合成服务已装（model=${model} voice=${voice} pcm@${sampleRate}Hz）`);
+  // 设置变了：只需处理“关掉”这一件 —— key / 音色 / 语速都是下个会话现读即生效。
+  // （这是全仓唯一“后端跟着设置变”的地方：前端关开关时，正在念的得马上停）
+  bus.on("setting.sync", (s) => {
+    if (s?.tts?.enabled) return;
+    if (!taskId) return;
+    console.log("[tts] 朗读被关闭 → 掐掉在途会话");
+    endSession(bus, "cancelled");
+  });
+
+  console.log(`[tts] 语音合成服务已装（model=${MODEL} pcm@${SAMPLE_RATE}Hz）`);
 }

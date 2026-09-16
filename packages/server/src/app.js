@@ -3,7 +3,7 @@ import { timingSafeEqual } from "node:crypto";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { config } from "./config.js";
+import { get as getSetting } from "./setting.js";
 import { signToken } from "./auth.js";
 import { requireAuth } from "./auth.js";
 
@@ -24,7 +24,8 @@ app.post("/api/login", (req, res) => {
   if (typeof password !== "string" || !password) {
     return res.status(400).json({ error: "请提供 password" });
   }
-  if (!safeCompare(password, config.password)) return res.status(401).json({ error: "密码错误" });
+  // ★ 密码**现读**：设置页改完密码立即生效，不用重启（见 setting.js 纪律②）
+  if (!safeCompare(password, getSetting().password)) return res.status(401).json({ error: "密码错误" });
   return res.json({ token: signToken() });
 });
 

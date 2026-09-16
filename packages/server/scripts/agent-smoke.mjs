@@ -2,7 +2,7 @@
 // 用法: node scripts/agent-smoke.mjs [cwd]        （默认 cwd = 本脚本所在包目录）
 //
 // 读表约定（PROTOCOL.new.md）：上行一律 emit 无回执，所以这里全是"发帧 → 等帧"。
-import "dotenv/config";
+import { getToken } from "./lib/creds.mjs";
 import WebSocket from "ws";
 import jwt from "jsonwebtoken";
 import { resolve } from "node:path";
@@ -18,26 +18,8 @@ const step = (name, ok, extra = "") => {
   ok ? pass++ : fail++;
 };
 
-// ── 连接（优先用明文密码登录；没有就走 JWT_SECRET 自签，免得冒烟被密码卡住）──
-let token = null;
-if (process.env.PASSWORD) {
-  try {
-    const r = await fetch(`${BASE}/api/login`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password: process.env.PASSWORD }),
-    });
-    token = (await r.json())?.token ?? null;
-  } catch {}
-}
-if (!token) {
-  if (!process.env.JWT_SECRET) {
-    console.error("拿不到登录凭据（.env 无 PASSWORD 也无 JWT_SECRET）");
-    process.exit(1);
-  }
-  token = jwt.sign({ sub: "owner" }, process.env.JWT_SECRET, { expiresIn: "10m" });
-  console.log("（用 JWT_SECRET 自签 token）");
-}
+// ── 连接（凭据从设置文件读：先试密码登录，失败就 jwtSecret 自签）──
+const token = await getToken(BASE, jwt);
 
 const ws = new WebSocket(`${BASE.replace("http", "ws")}/ws?token=${token}`);
 const bus = createBus({ requestTimeout: 30000 });

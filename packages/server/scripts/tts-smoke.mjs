@@ -5,39 +5,19 @@
 //   node scripts/tts-smoke.mjs 3 [秒]      两段 speak，间隔 N 秒（默认 25，> 阿里 23s 无 continue 超时）
 //   node scripts/tts-smoke.mjs 4           发一段(等出声) → break 断阿里 → 再发一段
 // 换活体: BASE=http://localhost:3000 node scripts/tts-smoke.mjs 1
-import "dotenv/config";
+import { getToken } from "./lib/creds.mjs";
 import WebSocket from "ws";
 import jwt from "jsonwebtoken";
 import { createBus } from "@pi-chamber/bus/core.js";
 import { nodeTransport } from "@pi-chamber/bus/transport-node.js";
 
 const BASE = process.env.BASE || "http://localhost:3001";
-const PASSWORD = process.env.PASSWORD;
 const SCENARIO = Number(process.argv[2] || 1);
 const GAP_MS = (Number(process.argv[3]) || 25) * 1000;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// token：明文密码走 /api/login；没配 PASSWORD 时直接用 JWT_SECRET 本地签（结构见 auth.js）
-let token;
-if (PASSWORD) {
-  const login = await fetch(`${BASE}/api/login`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ password: PASSWORD }),
-  });
-  if (!login.ok) {
-    console.error("登录失败", login.status);
-    process.exit(1);
-  }
-  token = (await login.json()).token;
-} else if (process.env.JWT_SECRET) {
-  token = jwt.sign({ sub: "owner" }, process.env.JWT_SECRET, {
-    expiresIn: process.env.TOKEN_TTL || "7d",
-  });
-} else {
-  console.error("拿不到凭据：.env 需 PASSWORD 明文或 JWT_SECRET");
-  process.exit(1);
-}
+// token：凭据从设置文件读（不再有 .env）——先试密码登录，失败就 jwtSecret 自签
+const token = await getToken(BASE, jwt);
 
 const ws = new WebSocket(`${BASE.replace("http", "ws")}/ws?token=${token}`);
 const bus = createBus({ requestTimeout: 20000 });

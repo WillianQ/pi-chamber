@@ -40,12 +40,13 @@ pi-chamber 是 pi 编码 agent（`@earendil-works/pi-coding-agent`）的**远程
 
 ```bash
 pnpm install
-cp packages/server/.env.example packages/server/.env   # 填 JWT_SECRET + PASSWORD
+# 不用建任何配置文件：首次启动自动生成 ~/.pi/pi-chamber-global-setting.json
+# （随机 jwtSecret + 默认密码 demo123456 —— 首次启动会打印在控制台）
 
 pnpm dev        # 后端 3001（node --watch 自重启）+ 前端 5173（vite HMR）
 ```
 
-浏览器打开 <http://localhost:5173> → 密码登录 → 选 Agent / 新建 Session → 右侧对话。
+浏览器打开 <http://localhost:5173> → 用 `demo123456` 登录 → **先去「设置 → 账号」把它改掉** → 选 Agent / 新建 Session → 右侧对话。
 
 生产运行：
 
@@ -60,10 +61,10 @@ pnpm start      # 后端 3000，托管前端页面
 
 ### 1. 语音（STT / TTS）需要阿里百炼的 key
 
-按住说话（语音输入）与朗读（语音输出）都走**阿里云百炼（DashScope）**的实时语音服务，需要一把 `DASHSCOPE_API_KEY`：
+按住说话（语音输入）与朗读（语音输出）都走**阿里云百炼（DashScope）**的实时语音服务，各自需要一把 key：
 
-- 写在 `packages/server/.env`（见 `.env.example`）
-- **不配** → 语音按钮点了**没反应**（后端日志：`[stt] 未配置 DASHSCOPE_API_KEY`）
+- 在**「设置 → 朗读」**与**「设置 → 识别」**里分别打开开关并粘贴 key（两处独立配置，同一把 key 填两遍即可）
+- **不配** → 语音按钮直接不显示 / 点了没反应
 - STT 默认模型 `fun-asr-realtime`；TTS 默认 `qwen-audio-3.0-tts-flash`
 - key 在 [百炼控制台](https://bailian.console.aliyun.com/) 申请（有免费额度）
 
@@ -210,7 +211,9 @@ pnpm bg start|stop|status|restart      # 后台常驻版（detached 起后端 30
 
 ## 安全提示
 
-- 单用户自用：登录密码在 `.env` 里**存明文**（`PASSWORD`，与 `JWT_SECRET` 同处，gitignored）。
+- 单用户自用：登录密码在 `~/.pi/pi-chamber-global-setting.json` 里**存明文**（`password`，与 `jwtSecret` 同处）。
+  首次启动的默认密码是 `demo123456` —— **公网暴露前必须先改**。
+- `jwtSecret` 与 `password` **永不下发前端**（`setting.sync` 里剔掉）。
 - JWT 无状态、无撤销：登出 = 前端丢 token；7 天 TTL 内 token 被偷仍有效（单用户可接受）。
 - 公网部署：前置 Caddy / nginx 做 TLS（`wss://`）—— 顺带满足语音输入的 HTTPS 前提（见「特殊说明」）。
 - **termd 不进公网**：只绑 `127.0.0.1:3002`，三层鉴权 —— ① 非 loopback 拒；② **带 `Origin` 头（浏览器发起）一律拒**；③ token（随机 24 字节，落 `packages/termd/data/token`）。拿到 token = 拿到这台机器的 shell。

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { CaretRightOutlined, DownOutlined, PauseOutlined, SoundOutlined, StopFilled } from "@ant-design/icons";
 import MessageBlock from "./MessageBlock.jsx";
 import { T } from "../../theme/tokens.js";
-import { useChatStore, chatActions, useTTSStore } from "../../stores";
+import { useChatStore, chatActions, useTTSStore, useSettingStore } from "../../stores";
 
 // 贴底距离阈值：距底 < 60px 视为“在底部”，自动滚到位/用户滚回来都靠它判归队。
 const NEAR_BOTTOM = 60;
@@ -34,9 +34,6 @@ export default function MessageList({ messages, status, sessionId }) {
   const { loadMore } = chatActions;
   const before = useChatStore((s) => s.before);
   const loadingMore = useChatStore((s) => s.loadingMore);
-  // TTS 浮动控制：朗读中/暂停时右下角浮出 播放/暂停 + 停止（圆钮，与「回到底部」同款）
-  const ttsPhase = useTTSStore((s) => s.phase);
-  const autoLive = useTTSStore((s) => s.autoLive); // 自动朗读（流式跟读）总开关
   // 跟踪态：true = 新内容来了自动滚底。用户把画面往上滑即停止跟踪；点「回到底部」或滚回底部归队。
   const [stick, setStick] = useState(true);
   const lastTopRef = useRef(0);
@@ -142,7 +139,7 @@ export default function MessageList({ messages, status, sessionId }) {
           />
         ))}
       </div>
-      {/* 右下角浮动钮栈：自上而下 = 停止、（播放/暂停）、回到底部（最下）——朗读控制在回到底部上方 */}
+      {/* 右下角浮动钮栈：自上而下 = 朗读控制组、回到底部（最下，thumb 位） */}
       <div
         style={{
           position: "absolute",
@@ -155,39 +152,51 @@ export default function MessageList({ messages, status, sessionId }) {
           gap: 10,
         }}
       >
-        {/* 停止（方块） */}
-        {ttsPhase !== "idle" && (
-          <button style={roundBtn} title="停止" onClick={() => useTTSStore.getState().stop()}>
-            <StopFilled />
-          </button>
-        )}
-        {/* 播放 / 暂停（朗读态图标高亮主色） */}
-        {ttsPhase !== "idle" && (
-          <button
-            style={{ ...roundBtn, color: ttsPhase === "paused" ? undefined : T.color.primary }}
-            title={ttsPhase === "paused" ? "继续" : "暂停"}
-            onClick={() =>
-              ttsPhase === "paused" ? useTTSStore.getState().resume() : useTTSStore.getState().pause()
-            }
-          >
-            {ttsPhase === "paused" ? <CaretRightOutlined /> : <PauseOutlined />}
-          </button>
-        )}
-        {/* 「回到底部」：用户翻历史时出现（贴底，thumb 位） */}
+        {/* 朗读控制组：停止 / 播放暂停 / 自动朗读开关（整组同生共死，见下方 TtsControls） */}
+        <TtsControls />
+        {/* 「回到底部」：用户翻历史时出现（最底 = thumb 位） */}
         {!stick && (
           <button style={roundBtn} onClick={jumpToBottom} title="回到底部">
             <DownOutlined />
           </button>
         )}
-        {/* autoLive 常驻开关（最底）：自动朗读总开关；开 = 主色高亮 */}
-        <button
-          style={{ ...roundBtn, color: autoLive ? T.color.primary : undefined }}
-          title={autoLive ? "自动朗读：开（agent 生成回复时实时朗读）" : "自动朗读：关（点击开启）"}
-          onClick={() => useTTSStore.getState().setAutoLive(!autoLive)}
-        >
-          <SoundOutlined />
-        </button>
       </div>
     </div>
+  );
+}
+
+// 朗读浮钮组：三个钮同属「朗读」一个功能，ttsEnabled 关着一并消失（自己读 store，父级不用传 props）。
+// 停止 / 播放暂停 只在朗读中（phase !== "idle"）出现；自动朗读开关常驻。
+function TtsControls() {
+  const ttsPhase = useTTSStore((s) => s.phase);
+  const autoLive = useTTSStore((s) => s.autoLive); // 自动朗读（流式跟读）总开关
+  const ttsEnabled = useSettingStore((s) => s.setting?.tts?.enabled) ?? false;
+  if (!ttsEnabled) return null;
+  return (
+    <>
+      {ttsPhase !== "idle" && (
+        <button style={roundBtn} title="停止" onClick={() => useTTSStore.getState().stop()}>
+          <StopFilled />
+        </button>
+      )}
+      {ttsPhase !== "idle" && (
+        <button
+          style={{ ...roundBtn, color: ttsPhase === "paused" ? undefined : T.color.primary }}
+          title={ttsPhase === "paused" ? "继续" : "暂停"}
+          onClick={() =>
+            ttsPhase === "paused" ? useTTSStore.getState().resume() : useTTSStore.getState().pause()
+          }
+        >
+          {ttsPhase === "paused" ? <CaretRightOutlined /> : <PauseOutlined />}
+        </button>
+      )}
+      <button
+        style={{ ...roundBtn, color: autoLive ? T.color.primary : undefined }}
+        title={autoLive ? "自动朗读：开（agent 生成回复时实时朗读）" : "自动朗读：关（点击开启）"}
+        onClick={() => useTTSStore.getState().setAutoLive(!autoLive)}
+      >
+        <SoundOutlined />
+      </button>
+    </>
   );
 }

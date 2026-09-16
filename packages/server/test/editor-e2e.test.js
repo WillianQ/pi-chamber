@@ -11,11 +11,14 @@ import path from "node:path";
 import WebSocket from "ws";
 import { createBus } from "@pi-chamber/bus/core.js";
 import { nodeTransport } from "@pi-chamber/bus/transport-node.js";
+import { writeSettingFile } from "./lib/setting-fixture.mjs";
 
 const PORT = 3997;
 const BASE = `http://localhost:${PORT}`;
 // nav 状态隔离：不碰 data/nav-state.json（测试之间会互相污染，见 nav-service.js 注释）
 const NAV_STATE_FILE = path.join(await mkdtemp(path.join(os.tmpdir(), "pc-editor-e2e-")), "nav-state.json");
+// 设置隔离：密码/密钥走临时文件（PI_CHAMBER_SETTING），不碰用户真实的 ~/.pi/...
+const SETTING_FILE = await writeSettingFile(path.dirname(NAV_STATE_FILE), PORT);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function until(fn, desc, ms = 8000) {
@@ -29,7 +32,7 @@ async function until(fn, desc, ms = 8000) {
 
 function startServer() {
   const proc = spawn(process.execPath, ["src/server.js"], {
-    env: { ...process.env, PORT: String(PORT), JWT_SECRET: "test-secret", PASSWORD: "test-password", NAV_STATE_FILE },
+    env: { ...process.env, PORT: String(PORT), PI_CHAMBER_SETTING: SETTING_FILE, NAV_STATE_FILE },
   });
   proc.stdout.setEncoding("utf8");
   proc.stderr.setEncoding("utf8");

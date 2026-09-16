@@ -45,7 +45,9 @@ import { cutBlock } from "../lib/tts-text.js";
 const TICK_MS = 2000; // 轮询拍表间隔
 const THRESHOLD_SEC = 3; // 播放剩余 < 3s 才补喂
 
-// —— 朗读参数持久化（localStorage；语速/音色/自动朗读关页不丢）——
+// —— 自动朗读开关持久化（localStorage；关页不丢）——
+// ★ 语速 / 音色**不在这里**：它们是服务端设置（setting.tts.rate / voice），见 setting-store.js。
+//   会话参数由后端在开新会话时现读 —— 前端只管把改动 emit 上去。
 const PARAMS_KEY = "tts.params";
 function loadParams() {
   try {
@@ -126,7 +128,7 @@ function tick() {
   bus
     .request(
       "tts.speak",
-      { text, rate: useTTSStore.getState().rate, voice: useTTSStore.getState().voice },
+      { text }, // 语速/音色不带：后端开新会话时从设置现读（setting.tts.rate / voice）
       { net: true, timeout: 10000 },
     )
     .then((r) => {
@@ -151,8 +153,6 @@ export const useTTSStore = create(() => ({
   phase: "idle", // idle | speaking | paused
   error: null,
   activeKey: null, // 手动朗读的源标识（消息 key），UI 据此点亮喇叭；live 不设（无喇叭可亮）
-  rate: loadParams().rate ?? 1.0, // 语速 [0.5, 2]；随每次 speak 带给后端（run-task 定死，下个会话生效）；localStorage 持久化
-  voice: loadParams().voice ?? "longanhuan_v3.6", // 音色（如 longanhuan_v3）；同上，会话参数，随 speak 携带
   autoLive: loadParams().autoLive ?? false, // 自动跟读总开关：只在 message_start 时决定是否 start("live")；默认关
 
   /** 朗读起点。kind="manual"：无条件抢权（清场，正在读的 live/手动全停）→ 手动任务；
@@ -209,32 +209,6 @@ export const useTTSStore = create(() => ({
     audioPlayer.resume();
     st({ phase: "speaking" });
     tick();
-  },
-
-  /** 调语速：存下值随下次 speak 生效。会话中途参数不可变 → 若在朗读先停（重读即用新语速） */
-  setRate(v) {
-    const r = Math.min(2, Math.max(0.5, Number(v) || 1));
-    const cur = useTTSStore.getState();
-    if (cur.rate === r) return;
-    if (cur.phase !== "idle" && !stopped) {
-      stopped = true;
-      stopPlayback(true);
-    }
-    persistParams({ rate: r });
-    st({ rate: r });
-  },
-
-  /** 调音色：存下值随下次 speak 生效（run-task 参数）→ 若在朗读先停 */
-  setVoice(v) {
-    const voice = String(v ?? "").trim() || "longanlingxi";
-    const cur = useTTSStore.getState();
-    if (cur.voice === voice) return;
-    if (cur.phase !== "idle" && !stopped) {
-      stopped = true;
-      stopPlayback(true);
-    }
-    persistParams({ voice });
-    st({ voice });
   },
 
   /** 自动跟读总开关：开 = 预热音频（live 注入在 bus 回调里，非手势，靠这次预热出声）；关 = 若在跟读先停 */
@@ -325,6 +299,13 @@ bus.on("agent.chat.sync", (p) => {
   if (!p || !("status" in p)) return;
   if (p.status !== "idle") return; // compacting = run 中间压缩（后面还有正文），不能当收尾
   if (mode === "live") useTTSStore.getState().finish();
+});
+
+bus.on("setting.sync", (s) => {
+  // 朗读被关掉 → 立刻停（后端也会拾掉在途会话；这边停本地播放与文本缓存）
+  if (s?.tts?.enabled) return;
+  const cur = useTTSStore.getState();
+  if (mode === "live" || cur.phase !== "idle") cur.stop();
 });
 
 // 每块（含最后一块）播完 → 评估收尾

@@ -3,7 +3,7 @@ import { CopyOutlined, SoundOutlined } from "@ant-design/icons";
 import MarkdownRenderer from "../../components/MarkdownRenderer.jsx";
 import CollapseCard from "../../components/CollapseCard.jsx";
 import { T } from "../../theme/tokens.js";
-import { chatActions, sessionsActions, useTTSStore } from "../../stores";
+import { chatActions, sessionsActions, useTTSStore, useSettingStore } from "../../stores";
 
 // 单条消息 = 一行"记账式"记录（无气泡）：角色标签行 + 正文平铺。
 // 全角色与档案 1:1；渲染层按 role 选样式，未知 role 走兜底不崩。
@@ -245,6 +245,7 @@ export default function MessageBlock({ msg, streaming, resultsMap }) {
   // TTS 朗读控制（顶层 hook：喇叭 = activeKey 命中且非 idle → 变暂停/停止）
   const ttsPhase = useTTSStore((s) => s.phase);
   const ttsActive = useTTSStore((s) => s.activeKey);
+  const ttsEnabled = useSettingStore((s) => s.setting?.tts?.enabled) ?? false; // 朗读总开关（设置页）
 
   switch (role) {
     case "user":
@@ -306,19 +307,22 @@ export default function MessageBlock({ msg, streaming, resultsMap }) {
                 >
                   <CopyOutlined />
                 </button>
-                <button
-                  className="pc-msgacts-btn"
-                  title={mine ? "正在朗读本条，点击从头重读" : "朗读本条回答"}
-                  onClick={() => {
-                    const s = useTTSStore.getState();
-                    s.start("manual", msg.key); // 无条件抢权：正在读的 live/其他手动全停（含重读同条）
-                    s.inject(copyText);
-                    s.finish();
-                  }}
-                  style={mine ? { color: T.color.primary } : undefined}
-                >
-                  <SoundOutlined />
-                </button>
+                {/* 朗读钮：朗读功能总开关关着就隐藏（开关在「设置 → 朗读」） */}
+                {ttsEnabled && (
+                  <button
+                    className="pc-msgacts-btn"
+                    title={mine ? "正在朗读本条，点击从头重读" : "朗读本条回答"}
+                    onClick={() => {
+                      const s = useTTSStore.getState();
+                      s.start("manual", msg.key); // 无条件抢权：正在读的 live/其他手动全停（含重读同条）
+                      s.inject(copyText);
+                      s.finish();
+                    }}
+                    style={mine ? { color: T.color.primary } : undefined}
+                  >
+                    <SoundOutlined />
+                  </button>
+                )}
               </div>
             );
           })()}

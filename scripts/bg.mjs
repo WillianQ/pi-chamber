@@ -18,6 +18,7 @@
  */
 import { spawn } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -27,12 +28,15 @@ const LOG_DIR = path.join(ROOT, "logs");
 const PID_FILE = path.join(LOG_DIR, "bg.pid");
 const ERR_LOG = path.join(LOG_DIR, "server.err.log");
 
-// 服务端端口：以 packages/server/.env 的 PORT 为准（读不到就默认 3000）
+// 服务端端口：以**设置文件**为准（不再有 .env）。路径规则与 server/src/setting.js 一致：
+// PI_CHAMBER_SETTING 可覆盖（测试隔离），否则 ~/.pi/pi-chamber-global-setting.json。
 function readPort() {
+  const file =
+    process.env.PI_CHAMBER_SETTING ||
+    path.join(os.homedir(), ".pi", "pi-chamber-global-setting.json");
   try {
-    const env = fs.readFileSync(path.join(SERVER_DIR, ".env"), "utf8");
-    const m = env.match(/^\s*PORT\s*=\s*(\d+)/m);
-    if (m) return Number(m[1]);
+    const s = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (Number.isInteger(s?.port) && s.port > 0 && s.port < 65536) return s.port;
   } catch {}
   return 3000;
 }
@@ -93,8 +97,8 @@ function start() {
     detached: true,      // ★ 脱离终端：关命令行不死
     stdio: ["ignore", "ignore", err],   // ★ stdout 丢弃（生产不写日志，见文件头注）；stderr 留档
     windowsHide: true,   // 不弹黑框
-    // 端口以 .env 为唯一真相：外部 shell 里若残留 PORT（比如跑过 pnpm dev），
-    // dotenv 不覆盖已存在的变量，会把后台进程顶到 3001 去。这里强制钉死。
+    // 端口以设置文件为唯一真相：setting.js 会把 PORT 当覆盖值用，这里显式钉死，
+    // 免得外部 shell 里残留的 PORT（比如跑过 pnpm dev 的 3001）把后台进程顶到别的端口。
     env: { ...process.env, PORT: String(port) },
   });
   child.unref();

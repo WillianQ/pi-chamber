@@ -6,7 +6,7 @@ import {
   SendOutlined,
   StopOutlined,
 } from "@ant-design/icons";
-import { useChatStore, chatActions, useSTTStore } from "../../stores/index.js";
+import { useChatStore, chatActions, useSTTStore, useSettingStore } from "../../stores/index.js";
 import { bus, useConnStore } from "../../bus.js";
 import { T } from "../../theme/tokens.js";
 import Palette from "./Palette.jsx";
@@ -52,11 +52,17 @@ export default function InputBox() {
   const [dismissed, setDismissed] = useState(false);
 
   // STT（按住说话）
+  // ★ 识别功能总开关（服务端设置）：关着时话筒钮照常渲染，只置灰不可按（布局不跳）
+  const sttEnabled = useSettingStore((s) => s.setting?.stt?.enabled) ?? false;
   const isRecording = useSTTStore((s) => s.isRecording);
   const listening = useSTTStore((s) => s.listening); // 真在采样：false = 启动中（还没开录，别说话）
   const partialText = useSTTStore((s) => s.partialText);
   const sttError = useSTTStore((s) => s.error);
   const connState = useConnStore((s) => s.state); // 离线时录音等于白推 → 禁钮
+  // 话筒钮可用口径：一处定义，disabled 与 onVoiceDown 共用。
+  // ★ 光靠 antd 的 disabled 拦不住 pointer 事件（React 只对 click/mouse* 做 disabled 检查）
+  //   → 按下仍会开录，所以 handler 里必须再判一次。
+  const voiceDisabled = !sttEnabled || connState !== "online" || isCompacting;
 
   const taRef = useRef(null); // antd TextArea → 原生 textarea
   const textRef = useRef(""); // text 的即时镜像（录音回调在事件外，别吃闭包旧值）
@@ -185,7 +191,7 @@ export default function InputBox() {
 
   // 按住说话：pointerdown 锁锚点+开录；up/leave/cancel 停录
   const onVoiceDown = (e) => {
-    if (connState !== "online") return;
+    if (voiceDisabled) return;
     e.preventDefault();
     const el = domTextArea();
     anchorRef.current = {
@@ -312,7 +318,8 @@ export default function InputBox() {
         autoSize={{ minRows: 1, maxRows: 8 }}
       />
 
-      {/* 动作行：停止(1) | 按住说话(2) | 发送/插队(1) */}
+      {/* 动作行：停止(1) | 按住说话(2) | 发送/插队(1)。三颗钮恒定布局（25/50/25）；
+          语音识别关着时话筒钮照常渲染，只是置灰不可按 —— 布局不因开关而变 */}
       <Flex gap={8}>
         <span style={{ flex: "1 1 25%" }}>
           {/* 停止：running / pending / compacting 都可点（口径同 chatActions.abort），只有空闲才禁用。
@@ -325,7 +332,7 @@ export default function InputBox() {
           <Button
             block
             danger={isRecording}
-            disabled={connState !== "online" || isCompacting}
+            disabled={voiceDisabled}
             icon={isRecording ? <LoadingOutlined /> : <AudioOutlined />}
             onPointerDown={onVoiceDown}
             onPointerUp={onVoiceUp}
