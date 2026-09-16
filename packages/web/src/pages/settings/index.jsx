@@ -396,10 +396,9 @@ export default function SettingsPage() {
         {page.render({ setting: s, tts: s.tts, stt: s.stt })}
       </div>
 
-      {/* ③ 分页选择器 */}
+      {/* ③ 分页选择器（默认尺寸，与 sessions 页底部 Agent 选择器同高） */}
       <div style={{ padding: "10px 12px", borderTop: `1px solid ${T.color.hairline}`, flexShrink: 0 }}>
         <Select
-          size="small"
           style={{ width: "100%" }}
           value={tab}
           onChange={setTab}
