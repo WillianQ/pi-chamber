@@ -52,7 +52,7 @@ import {
   getAgentDir,
 } from "@earendil-works/pi-coding-agent";
 import { BUILTINS, commandsOf } from "./commands.js";
-import { rowOfMessage, rowOfEntry, draftOf, isoOf, textOf } from "./messages.js";
+import { rowOfMessage, rowOfEntry, draftOf, isoOf, textOf, imagesOf } from "./messages.js";
 import { buildPluginTools, applyPluginActivation, restorePluginStates } from "./plugins/index.js";
 
 /** 出勤表：进程内所有活跃出勤（已创建/已打开） */
@@ -321,6 +321,7 @@ async function pushChatFull(bus) {
       before: null,
       commands: [],
       model: null,
+      modelInput: null,
       thinkingLevel: null,
       steers: [],
       info: null,
@@ -339,6 +340,7 @@ async function pushChatFull(bus) {
     before: cursorOf(entry),
     commands: await commandsOfSafe(entry),
     model: s.model?.id ?? null,
+    modelInput: s.model?.input ?? null,
     thinkingLevel: s.thinkingLevel ?? null,
     steers: [...s.getSteeringMessages()],
     info: infoOf(entry),
@@ -358,6 +360,7 @@ async function refreshFocus(bus, entry) {
         status: statusOf(entry),
         info: infoOf(entry),
         model: s.model?.id ?? null,
+        modelInput: s.model?.input ?? null,
         thinkingLevel: s.thinkingLevel ?? null,
         steers: [...s.getSteeringMessages()],
         commands: await commandsOfSafe(entry),
@@ -944,6 +947,35 @@ function truncateText(s, n = 60) {
   return t.length > n ? t.slice(0, n) + "…" : t;
 }
 
+// ── 图片入参校验（服务端兜底；前端已用 canvas 压过一道）──
+// 为什么要硬上限：前端压缩万一失败（老浏览器 / canvas 被禁），不能把 5MB 原图默默写进 jsonl。
+const IMAGE_MIMES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
+const MAX_IMAGES = 5;
+const MAX_IMAGE_CHARS = 2 * 1024 * 1024; // 单张 base64 字符上限（≈1.5MB 原始字节）
+
+/** 收上行帧里的 images：形状不对/超限就整条拒（宁可不发，也不默默存下原图）。
+ *  @returns { images: {type,data,mimeType}[] | undefined, error: string | null } */
+function normalizeImages(raw) {
+  if (raw == null) return { images: undefined, error: null };
+  if (!Array.isArray(raw)) return { images: undefined, error: "图片格式不对" };
+  if (!raw.length) return { images: undefined, error: null };
+  if (raw.length > MAX_IMAGES) return { images: undefined, error: `一次最多 ${MAX_IMAGES} 张图` };
+  const out = [];
+  for (const x of raw) {
+    const mimeType = String(x?.mimeType ?? "");
+    const data = x?.data;
+    if (x?.type !== "image" || typeof data !== "string" || !data) {
+      return { images: undefined, error: "图片格式不对" };
+    }
+    if (!IMAGE_MIMES.has(mimeType)) {
+      return { images: undefined, error: `不支持的图片类型：${mimeType || "未知"}` };
+    }
+    if (data.length > MAX_IMAGE_CHARS) return { images: undefined, error: "图片太大（单张限 2MB）" };
+    out.push({ type: "image", data, mimeType });
+  }
+  return { images: out, error: null };
+}
+
 /** 内置命令识别：/名 [参数] 全串匹配（名不含空白；参数 = 名字后的全部，可含空白与 /）。
  *  口径对齐 SDK 的 _tryExecuteExtensionCommand / _expandSkillCommand（都只切第一个空格）。
  *  未命中 → null（原样下传：扩展命令 /skill:x /模板 由 SDK 内部自动处理，未知命令当普通文本发给模型）。 */
@@ -956,17 +988,25 @@ function builtinOf(text) {
 
 /** 受理 prompt（emit，无回执）：命令就地执行 / 空闲起一轮 / busy 插队。
  *  忙闲唯一判据 = agentSession.isStreaming（SDK 真值，不另存状态）。
- *  ★ 命令一律不挡忙（学 pi TUI）：分诊必须在 isStreaming 分叉之前，否则一忙就永远跑不了。 */
-async function promptSession(sessionId, text, bus) {
+ *  ★ 命令一律不挡忙（学 pi TUI）：分诊必须在 isStreaming 分叉之前，否则一忙就永远跑不了。
+ *  ★ images 是可选入参（前端已压到 1280px/JPEG）：文本与图**至少一个非空**（纯图也放行）。 */
+async function promptSession(sessionId, text, images, bus) {
   const key = String(sessionId ?? "").trim();
   const entry = sessions.get(key);
-  if (!entry || typeof text !== "string" || !text.trim()) {
-    notice(bus, { sessionId: key, type: "error", message: entry ? "内容为空" : `Session 未打开: ${key}` });
+  const raw = typeof text === "string" ? text : "";
+  const { images: imgs, error: imgErr } = normalizeImages(images);
+  if (!entry || imgErr || (!raw.trim() && !imgs)) {
+    notice(bus, {
+      sessionId: key,
+      type: "error",
+      message: !entry ? `Session 未打开: ${key}` : imgErr || "内容为空",
+    });
     if (entry) refreshFocus(bus, entry);
     return;
   }
+  const tag = imgs ? ` +${imgs.length} 张图` : "";
 
-  const hit = builtinOf(text);
+  const hit = builtinOf(raw);
   if (hit) {
     // 命令：不起 run、不产生用户消息、不进 transcript；受理即回（/compact 跑几十秒不能卡输入框）
     console.log(`[agent] 命令受理 ${key}: /${hit.name}`);
@@ -989,8 +1029,8 @@ async function promptSession(sessionId, text, bus) {
   }
 
   if (entry.agentSession.isStreaming) {
-    console.log(`[agent] steer 受理 ${key}: “${truncateText(text)}”（等当前 toolCall 收尾后投递）`);
-    entry.agentSession.steer(text).catch((err) => {
+    console.log(`[agent] steer 受理 ${key}: “${truncateText(raw) || "（无文字）"}”${tag}（等当前 toolCall 收尾后投递）`);
+    entry.agentSession.steer(raw, imgs).catch((err) => {
       // 插队被拒（压缩 / 重试临界等）或扩展命令（SDK 不给插队）：run 还在跑，只弹错 + 补真值帧
       console.error(`[agent] steer 失败 ${key}: ${err?.message ?? err}`);
       notice(bus, { sessionId: key, type: "error", message: String(err?.message ?? err) });
@@ -999,8 +1039,8 @@ async function promptSession(sessionId, text, bus) {
     return;
   }
 
-  console.log(`[agent] prompt 受理 ${key}: “${truncateText(text)}”`);
-  entry.agentSession.prompt(text).catch((err) => {
+  console.log(`[agent] prompt 受理 ${key}: “${truncateText(raw) || "（无文字）"}”${tag}`);
+  entry.agentSession.prompt(raw, imgs ? { images: imgs } : undefined).catch((err) => {
     // 没起跑就炸（无 key / 没选模型 / 压缩中 / 被抢先）→ 补真值帧（清 pending）+ 弹错
     console.error(`[agent] prompt 失败 ${key}: ${err?.message ?? err}`);
     notice(bus, { sessionId: key, type: "error", message: String(err?.message ?? err) });
@@ -1051,16 +1091,20 @@ async function moreMessages(sessionId, before) {
   return { messages: out, before: cur?.id ?? null };
 }
 
-/** 补全一条被裁的 toolResult：直接翻档案按 toolCallId 找全文（内存对象，零 IO） */
+/** 补全一条被裁的 toolResult：直接翻档案按 toolCallId 找全文（内存对象，零 IO）。
+ *  ★ 图也在这里一并给（懒加载）：agent 读的图可能又多又大，首屏/翻页故意不带，
+ *    只有用户真点开这条工具结果时才拉 —— 回执形状 { text, images }。 */
 async function toolResultText(sessionId, toolCallId) {
   const entry = sessions.get(String(sessionId ?? "").trim());
   if (!entry) throw new Error(`Session 未打开: ${sessionId}`);
   for (const e of entry.sm.getEntries()) {
     if (e.type !== "message") continue;
     const m = e.message;
-    if (m?.role === "toolResult" && m.toolCallId === toolCallId) return { text: textOf(m) };
+    if (m?.role === "toolResult" && m.toolCallId === toolCallId) {
+      return { text: textOf(m), images: imagesOf(m) };
+    }
   }
-  return { text: null };
+  return { text: null, images: null };
 }
 
 // ───────────────────────── 挂到 bus ─────────────────────────
@@ -1097,7 +1141,7 @@ export function installAgentService(bus) {
   safeOn(bus, "agent.session.close", (p, _m, b) => closeSession(p?.sessionId, b ?? bus));
   safeOn(bus, "agent.session.create", (p, _m, b) => createSession(p?.cwd, b ?? bus));
   safeOn(bus, "agent.session.delete", (p, _m, b) => deleteSession(p?.sessionId, b ?? bus));
-  safeOn(bus, "agent.session.prompt", (p, _m, b) => promptSession(p?.sessionId, p?.text, b ?? bus));
+  safeOn(bus, "agent.session.prompt", (p, _m, b) => promptSession(p?.sessionId, p?.text, p?.images, b ?? bus));
   safeOn(bus, "agent.session.abort", (p, _m, b) => abortSession(p?.sessionId, b ?? bus));
 
   // 读数据走 request：失败要让回执 ok:false，所以**不能**套 safeOn（会把错误吞成空回执）

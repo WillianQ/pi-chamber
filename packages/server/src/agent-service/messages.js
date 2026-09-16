@@ -56,6 +56,24 @@ function flattenText(message) {
   return parts.join("\n");
 }
 
+/** 消息里的图片块 → 线帧形状 [{ type:"image", mimeType, data }]。
+ *  ★ 与 prompt 上行的 images **同一形状**（线协议里图片块只有一个形状 ——
+ *    别在这里剥字段：形状不一致的话，消费方（前端渲染 / 日志脱敏）就得分两套判据）。
+ *  ★ 只给 user 消息用（首屏/翻页/实时都带 —— 那是用户自己的输入，必须一眼看到）。
+ *    toolResult 的图**故意不投影**：agent 读的图可能又多又大，改成点开时走
+ *    agent.chat.toolResult 现拉（见 index.js 的 toolResultText）。 */
+function imagesOf(message) {
+  const c = message?.content;
+  if (!Array.isArray(c)) return null;
+  const out = [];
+  for (const x of c) {
+    if (x?.type === "image" && typeof x.data === "string") {
+      out.push({ type: "image", mimeType: x.mimeType ?? "image/png", data: x.data });
+    }
+  }
+  return out.length ? out : null;
+}
+
 /** 全角色 → 可渲染文本。多数角色有 content 数组（摊平）；
  *  bashExecution / *Summary 是扁平消息（无 content，字段即内容）。 */
 function textOf(m) {
@@ -143,6 +161,13 @@ function rowOfMessage(m) {
       row.customType = m.customType;
       row.display = m.display;
       break;
+    case "user": {
+      // 图片随帧全量带（压缩后的图 ~150KB/张）。text 里的 "[图片]" 占位保留
+      // —— 前端有 images 时把那些行滤掉，没有（纯文本降级）时它还能顶个数。
+      const images = imagesOf(m);
+      if (images) row.images = images;
+      break;
+    }
     case "assistant": {
       const blocks = blocksOf(m);
       if (blocks) row.blocks = blocks;
@@ -188,5 +213,5 @@ function rowOfEntry(entry) {
   return row;
 }
 
-export { rowOfMessage, rowOfEntry, draftOf, isoOf, textOf };
+export { rowOfMessage, rowOfEntry, draftOf, isoOf, textOf, imagesOf };
 export { TOOL_RESULT_KEEP };

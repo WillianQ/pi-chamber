@@ -1,9 +1,11 @@
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
+import { Flex, Image } from "antd";
 import { CopyOutlined, SoundOutlined } from "@ant-design/icons";
 import MarkdownRenderer from "../../components/MarkdownRenderer.jsx";
 import CollapseCard from "../../components/CollapseCard.jsx";
 import { T } from "../../theme/tokens.js";
 import { chatActions, sessionsActions, useTTSStore, useSettingStore } from "../../stores";
+import { dataUrl } from "./attachments.js";
 
 // 单条消息 = 一行"记账式"记录（无气泡）：角色标签行 + 正文平铺。
 // 全角色与档案 1:1；渲染层按 role 选样式，未知 role 走兜底不崩。
@@ -87,6 +89,67 @@ const preStyle = {
   wordBreak: "break-word",
 };
 
+/** toolCall 的参数名（一行一个，mono + 加粗）：与值（preStyle 正文）拉开层级 ——
+ *  名字是标签（淡），值才是内容。 */
+const argNameStyle = {
+  fontFamily: T.fontFamily.mono,
+  fontSize: T.fontSize.xs,
+  fontWeight: 600,
+  color: T.color.textMuted,
+};
+
+/** 参数值 → 显示文本：字符串原样（\n 保留）、对象/数组走 pretty JSON、其余 String()。
+ *  ★ 绝不吞换行：edit 的 oldText / write 的 content 都是多行文本，换成单行就废了。 */
+function argText(v) {
+  if (typeof v === "string") return v;
+  if (v == null) return String(v);
+  if (typeof v === "object") {
+    try {
+      return JSON.stringify(v, null, 2);
+    } catch {
+      return String(v);
+    }
+  }
+  return String(v);
+}
+
+/** toolCall 参数：解析成对象后**逐字段铺开**（一整坨 JSON 读起来太累）：
+ *
+ *      参数名
+ *      参数值
+ *
+ *      参数名2
+ *      参数值
+ *
+ *  ★ 流式中 args 可能是**半截 JSON**（provider 边解析边吐，或 pi-ai 的 partialJson）
+ *    → parse 失败就退回原样 pre，**绝不丢内容**（终稿会整条替换成解析得动的）。 */
+function ToolArgs({ args }) {
+  const parsed = useMemo(() => {
+    if (typeof args !== "string" || !args.trim()) return null;
+    try {
+      const v = JSON.parse(args);
+      return v && typeof v === "object" && !Array.isArray(v) ? v : null;
+    } catch {
+      return null; // 半截 JSON / 非对象：退回原样
+    }
+  }, [args]);
+
+  if (!parsed) return <pre style={preStyle}>{args || "（参数生成中…）"}</pre>;
+  const entries = Object.entries(parsed);
+  if (!entries.length) return <pre style={preStyle}>{"{ }"}</pre>;
+
+  return (
+    <div>
+      {entries.map(([k, v]) => (
+        <div key={k} style={{ marginBottom: 8 }}>
+          <div style={argNameStyle}>{k}</div>
+          <pre style={{ ...preStyle, marginTop: 2 }}>{argText(v)}</pre>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /** 可折叠区（工具输出/命令回显）：summary 一行预览，展开看全文。
  *  onOpen：展开时回调（toolResult 被裁过 → 这时候才去要全文）。 */
 function Fold({ preview, children, defaultOpen = false, onOpen }) {
@@ -116,13 +179,43 @@ function Fold({ preview, children, defaultOpen = false, onOpen }) {
   );
 }
 
+/** 图片条：一条消息里的所有图（我发的 / agent 读到的）。点击放大（antd Image 自带预览）。
+ *  两个消费者：user 消息（随帧带）与 toolResult（点开时才拉，见 ToolResultBody）。 */
+function ImageStrip({ images }) {
+  if (!images?.length) return null;
+  return (
+    <Flex wrap gap={6} style={{ marginTop: 6 }}>
+      {images.map((im, i) => (
+        <Image
+          key={i}
+          src={dataUrl(im)}
+          alt=""
+          height={160}
+          style={{
+            borderRadius: T.radius.sm,
+            border: `1px solid ${T.color.hairline}`,
+            objectFit: "cover",
+            display: "block",
+          }}
+        />
+      ))}
+    </Flex>
+  );
+}
+
 /** 工具结果正文：被裁过（truncated）就在**挂载时**自动要全文
- *  （CollapseCard 收起时不挂 children → 挂载 = 用户刚展开）。 */
+ *  （CollapseCard 收起时不挂 children → 挂载 = 用户刚展开）。
+ *  ★ 图也在这时候一并拉（agent 读的图首屏/翻页故意不带，见服务端 messages.js）。 */
 function ToolResultBody({ result }) {
   useEffect(() => {
     if (result?.truncated && result.toolCallId) chatActions.expandToolResult(result.toolCallId);
   }, [result?.truncated, result?.toolCallId]);
-  return <pre style={preStyle}>{result?.text || "（空结果）"}</pre>;
+  return (
+    <>
+      <pre style={preStyle}>{result?.text || "（空结果）"}</pre>
+      <ImageStrip images={result?.images} />
+    </>
+  );
 }
 
 /** subagent 工具的额外入口：它派出去的是一份**真出勤**（独立档案、独立上下文），
@@ -203,7 +296,7 @@ function BlockItem({ b, streaming, result }) {
         tone={result?.isError ? "error" : "ok"}
         header={`⚙ Tool · ${b.name || "(未知工具)"}${state}${sub ? " · 子 Session" : ""}`}
       >
-        <pre style={preStyle}>{b.args}</pre>
+        <ToolArgs args={b.args} />
         {sub?.childSessionId && <SubagentLink sub={sub} />}
         {result ? (
           <>
@@ -248,23 +341,36 @@ export default function MessageBlock({ msg, streaming, resultsMap }) {
   const ttsEnabled = useSettingStore((s) => s.setting?.tts?.enabled) ?? false; // 朗读总开关（设置页）
 
   switch (role) {
-    case "user":
+    case "user": {
       // 无标签，身份由色块表达
+      // text 里那个 "[图片]" 占位（服务端 flattenText 摊出来的）在有真图时滤掉，免得看着重复
+      const body = msg.images?.length
+        ? (text || "")
+            .split("\n")
+            .filter((l) => l.trim() !== "[图片]")
+            .join("\n")
+            .trim()
+        : text;
       return (
         <div style={rowStyle(role)}>
-          <div
-            style={{
-              whiteSpace: "pre-wrap",
-              wordBreak: "break-word",
-              color: T.color.textPrimary,
-              fontSize: T.fontSize.sm,
-              lineHeight: T.lineHeight.base,
-            }}
-          >
-            {text}
-          </div>
+          <ImageStrip images={msg.images} />
+          {body ? (
+            <div
+              style={{
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-word",
+                color: T.color.textPrimary,
+                fontSize: T.fontSize.sm,
+                lineHeight: T.lineHeight.base,
+                marginTop: msg.images?.length ? 6 : 0,
+              }}
+            >
+              {body}
+            </div>
+          ) : null}
         </div>
       );
+    }
 
     case "assistant": {
       const hint = STOP_HINT[msg.stopReason];
@@ -340,6 +446,7 @@ export default function MessageBlock({ msg, streaming, resultsMap }) {
             onOpen={() => msg.truncated && chatActions.expandToolResult(msg.toolCallId)}
           >
             <pre style={preStyle}>{text}</pre>
+            <ImageStrip images={msg.images} />
           </Fold>
         </div>
       );

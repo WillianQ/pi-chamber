@@ -33,6 +33,7 @@ const SYNC_KEYS = [
   "before",
   "commands",
   "model",
+  "modelInput",
   "thinkingLevel",
   "steers",
   "info",
@@ -53,6 +54,7 @@ export const useChatStore = create(() => ({
   before: null, // 翻页游标（对前端不透明：服务端生成、存着、下次原样回抄）
   commands: [], // / 命令清单（随焦点走）
   model: null,
+  modelInput: null, // 当前模型吃的输入类型（"text" | "image"）—— 图片入口的开关，服务端预判后随 sync 推
   thinkingLevel: null,
   steers: [], // 未投递的插队队列
   info: null, // { input, output, cacheRead, cacheWrite, cost, contextTokens, contextPercent, contextWindow }
@@ -154,11 +156,14 @@ export const chatActions = {
   },
 
   /** 发消息（emit，无回执）：受理即清输入框（调用方据返回值决定清不清）。
-   *  空闲 = 起一轮；running/compacting = 服务端自动走插队（steer）。pending 在途时先挡住。 */
-  send(text) {
+   *  空闲 = 起一轮；running/compacting = 服务端自动走插队（steer）。pending 在途时先挡住。
+   *  ★ images 可选（线帧形状 { type:"image", data, mimeType }，前端已压过）：
+   *    文本与图**至少一个非空**（纯图也放行）；不带图时字段省略（帧形状与老版一字不差）。 */
+  send(text, images) {
     const { activeId, status } = useChatStore.getState();
     const t = String(text ?? "").trim();
-    if (!activeId || !t) return false;
+    const imgs = Array.isArray(images) && images.length ? images : null;
+    if (!activeId || (!t && !imgs)) return false;
     if (status === "pending") return false; // 上一条还没落定，别叠
     if (!online()) {
       useChatStore.setState({ error: "未连接服务器" });
@@ -166,7 +171,11 @@ export const chatActions = {
     }
     useChatStore.setState({ status: "pending", error: null });
     markPendingRow(activeId);
-    bus.emit("agent.session.prompt", { sessionId: activeId, text: t }, { net: true });
+    bus.emit(
+      "agent.session.prompt",
+      { sessionId: activeId, text: t, ...(imgs ? { images: imgs } : null) },
+      { net: true }
+    );
     return true;
   },
 
@@ -205,7 +214,8 @@ export const chatActions = {
     }
   },
 
-  /** 展开一条被裁的 toolResult：翻档案取全文，换掉 text 并清 truncated */
+  /** 展开一条被裁的 toolResult：翻档案取全文（+ 图，懒加载），换掉 text 并清 truncated。
+   *  ★ 图只在这一刻拿：agent 读的图可能又多又大，首屏/翻页故意不带（见服务端 messages.js）。 */
   async expandToolResult(toolCallId) {
     const { activeId } = useChatStore.getState();
     if (!activeId || !toolCallId) return;
@@ -219,7 +229,7 @@ export const chatActions = {
       useChatStore.setState((s) => ({
         messages: s.messages.map((m) =>
           m.role === "toolResult" && m.toolCallId === toolCallId
-            ? { ...m, text: r.text, truncated: false }
+            ? { ...m, text: r.text, truncated: false, ...(r.images?.length ? { images: r.images } : null) }
             : m
         ),
       }));

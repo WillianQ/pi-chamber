@@ -200,7 +200,7 @@ pi-chamber/
             ├── pages/              # 页面（一页一目录）
             │   ├── login.jsx
             │   ├── sessions/       #   Session 管理面板
-            │   ├── chat/           #   消息流 index / MessageList / MessageBlock / InputBox / Palette（输入框补全面板：/ 命令 + @ 文件引用，规矩在 command-match.js / file-match.js）/ TodosPanel（待办清单，输入框上方）；朗读 UI：MessageList 右下浮钮+自动朗读开关 / MessageBlock 喇叭；按住说话在 InputBox
+            │   ├── chat/           #   消息流 index / MessageList / MessageBlock / InputBox / Palette（输入框补全面板：/ 命令 + @ 文件引用，规矩在 command-match.js / file-match.js）/ TodosPanel（待办清单，输入框上方）/ attachments.js（图片附件：挑选+压缩纯函数，见第 4 章「图片」）；朗读 UI：MessageList 右下浮钮+自动朗读开关 / MessageBlock 喇叭；按住说话在 InputBox
             │   ├── nav/            #   目录导航活动页（NavPage+行组件+弹窗+底部文件/文件夹搜索框全单文件）
             │   ├── editor/         #   编辑器活动页 index + CodeEditor（CodeMirror，懒加载）
             │   ├── terminal/       #   终端活动页 index（标题条/画布/TabBar）+ TermView（xterm 实例，懒加载）
@@ -300,7 +300,7 @@ ws.onclose   = () => bus.detachTransport("ws closed");
 | `agent.sessions.sync` | emit(s→w) | `{agents, selectedCwd, sessions}` | — | 名册全量：连接 / 换目录。`agents:[{cwd, basename, sessionCount}]`；`sessions:[{id, cwd, name, updateTime, messageCount, status, isSubAgent, parentId}]`（只含 `selectedCwd` 这一个目录的场次） |
 | `agent.sessions.patch` | emit(s→w) | `{agents?, rows?}` | — | 名册增量：其余所有名册变化（**不分焦点**，后台出勤的灯/条数也要动）。`rows` 元素 `{id, cwd, status?, messageCount?, updateTime?, name?, isSubAgent?, parentId?, deleted?}`；`agents` 按 cwd 合并 |
 | `agent.sessions.list` | emit(w→s) | `{cwd}` | — | 换目录（Agent 下拉）：服务端记下名册目录 `cwd` 并重推 sync；不动焦点，无失败路径 |
-| `agent.chat.sync` | emit(s→w) | `activeId / cwd / messages / before / commands / model / thinkingLevel / steers / info / status` 的任意子集 | — | 对话：**字段级替换**（帧里出现的字段就是该字段的完整真值；不出现 = 前端不动它）。带 `activeId` 的整组帧只出现在连接 / open（必带全量，含 messages） |
+| `agent.chat.sync` | emit(s→w) | `activeId / cwd / messages / before / commands / model / modelInput / thinkingLevel / steers / info / status` 的任意子集 | — | 对话：**字段级替换**（帧里出现的字段就是该字段的完整真值；不出现 = 前端不动它）。带 `activeId` 的整组帧只出现在连接 / open（必带全量，含 messages）。`modelInput` = 当前模型吃的输入类型（`["text"]` / `["text","image"]`，服务端从 `s.model.input` 取）—— 图片入口的开关，**服务端预判**，前端不猜 |
 | `agent.chat.message` | emit(s→w) | `{m, open?}` | — | 整条消息（**裸帧**，只发焦点）。`open:true` = 草稿；省略 = 终稿（整条替换那条草稿） |
 | `agent.chat.delta` | emit(s→w) | `{ci, k:"t"\|"h"\|"c", x, name?}` | — | 内容增量（裸帧）：t=text / h=thinking / c=toolCall 参数；服务端攒够 **30 个 delta 事件**打包发一条 |
 | `agent.chat.notice` | emit(s→w) | `{sessionId?, type:"error"\|"retry"\|"reload", message, attempt?, maxAttempts?, phase?, success?}` | — | 提示：error → 写 chat.error（不写 messages）；retry → 顶栏重试计数；reload → 写 chat.notice（`/reload` 回执，message = 服务端拼好的整句「重载了什么 + 诊断」，前端不解析）。带 sessionId 时前端据此清该行 pending |
@@ -308,10 +308,10 @@ ws.onclose   = () => bus.detachTransport("ws closed");
 | `agent.session.close` | emit(w→s) | `{sessionId}` | — | 收工：释放运行时、**保留档案**；命中焦点 → `chat.sync{activeId:null}` |
 | `agent.session.create` | emit(w→s) | `{cwd}` | — | 新建幽灵出勤（惰性落盘）+ 置焦；回帧 = patch（插行 + agents 计数）+ chat.sync 全量 |
 | `agent.session.delete` | emit(w→s) | `{sessionId}` | — | 销毁：释放运行时 + **删档案 jsonl（永久）**；**连带它派出去的子场**（沿档案头 `parentSession` 往下逐层找，子孙一起删——父没了那些行就是孤儿）；SDK SessionManager 无删除 API（v0.84.4）→ 自补 `fs.unlink`，白名单只认 `<agentDir>/sessions` 内 .jsonl |
-| `agent.session.prompt` | emit(w→s) | `{sessionId, text}` | — | 受理即走：空闲起一轮 / running 时插队（steer）/ 命中内置命令就地执行；**无回执**（输入框发出即清） |
+| `agent.session.prompt` | emit(w→s) | `{sessionId, text, images?}` | — | 受理即走：空闲起一轮 / running 时插队（steer）/ 命中内置命令就地执行；**无回执**（输入框发出即清）。`images` 可选 = `[{type:"image", data(base64), mimeType}]`（前端已压到 1280px/JPEG，~150KB/张）；**文本与图至少一个非空**（纯图也放行）；服务端硬校验（类型白名单 / ≤5 张 / 单张 base64 ≤2MB），不合格整条拒并弹 notice |
 | `agent.session.abort` | emit(w→s) | `{sessionId}` | — | 停止当前轮：clearQueue → abort 到 idle；幂等 |
 | `agent.chat.more_messages` | request | `{sessionId, before}` | `{messages, before}` | 向前翻页（一页 20 条）：源 = 档案 `getEntries()`，从 `before` 沿 `parentId` 回溯 |
-| `agent.chat.toolResult` | request | `{sessionId, toolCallId}` | `{text}` | 取被裁的 toolResult 全文（档案里按 toolCallId 找） |
+| `agent.chat.toolResult` | request | `{sessionId, toolCallId}` | `{text, images}` | 取被裁的 toolResult 全文（档案里按 toolCallId 找）+ **它带的图**。★ 图只在这里给（懒加载）：agent 读的图可能又多又大，首屏/翻页故意不带（`messages.js` 只给 user 消息投影 images） |
 | `agent.plugin.state` | emit(s→w) | `{sessionId, state}` | — | 插件状态（如 todos）：`state = {插件key: 状态}`（整场全量，如 `{todos:[{description,status}]}`）；`state:null` = 这场没了（前端删条目）。**广播不分焦点**（后台场次的进度也要动）。触发：工具每次写完 / $conn.open 补推 / open 恢复 / close·delete 清 |
 | `nav.state` | emit(s→w) | `{current, cwd, items}` | — | 导航现场唯一真相流：$conn.open / nav.open 生效 / focused 联动 / **fs 写侧成功后补推**；items 现拉现给 |
 | `nav.update` | emit(s→w) | `{add\|change:{type, name, abs_path}}` 或 `{remove:{abs_path}}` | — | watcher 增量：fs.watch 盯 current（depth 0），一条事件推一条 |
@@ -383,6 +383,10 @@ type Session = { id, cwd, name, updateTime, messageCount, status, isSubAgent, pa
 type Message = {
   key?            // 前端本地自增（服务端不发 id）：★ 不能用下标派生，翻页前插会让 key 全位移
 ts, text          // ISO / 摊平文本（纯文本渲染 + 朗读用）
+  images?         // [{type:"image", mimeType, data(base64)}] —— **只有 user 消息有**（我发出去的图，首屏/翻页/实时都带）
+                  //   形状与上行 prompt 的 images **一字不差**（同一形状贯穿全线）；
+                  //   toolResult 的图不走这里（点开才拉，见 agent.chat.toolResult）
+                  //   注：text 里仍有 "[图片]" 占位（服务端 flattenText 摊的），前端有 images 时滤掉那几行
   open?           // 草稿标记（前端落地）
   role: "user" | "assistant" | "toolResult" | "bashExecution" | "custom"
       | "compactionSummary" | "branchSummary"
@@ -416,6 +420,11 @@ type PluginState = { [pluginKey: string]: unknown }
 - **草稿的两处补丁**：① 首屏 `chat.sync.messages` 末尾会挂一条 `open:true` 在途草稿（`state.streamingMessage` 不在 `state.messages` 里，不挂就干等 message_end）；② `toolcall_start` 的 name 可能是空串（OpenAI 系在 name 之前就 push 了 start）→ 允许后续 delta 补带。
 - **消息投影**（`agent-service/messages.js`，首屏/实时/翻页三个消费者共用一套，口径必须一致）：时间戳统一 ISO；`toolResult.text` 裁到前 50 字 + `truncated:true`（展开时走 `chat.toolResult` 要全文）；assistant 的 `blocks` 带 `ci`（= content[] 下标，实时 delta 按 ci 入格）。角色附加字段：assistant `stopReason/blocks/model/usage/errorMessage`；toolResult `toolCallId/toolName/isError/subagent`（`subagent` = 白名单投影：只认 `toolName==="subagent"`，从 `details` 里只挑 `childSessionId/status/usage` 三个字段 —— details 是各工具自留地，全透传会把线帧撑大）；bashExecution `command/exitCode/cancelled/truncated`；custom `customType/display`；usage 精简 `{input,output,cacheRead,cacheWrite,total,cost}`。压缩/分支摘要是独立档案 entry（`type:"compaction"/"branch_summary"`，文本在 `entry.summary`）→ 投影成 `compactionSummary`/`branchSummary` 角色。
 - **info 口径**：`info` = `getSessionStats()`（`tokens.*` + `cost`，**整场累计含被压缩掉的历史**）+ `getContextUsage()`（`contextTokens/contextPercent/contextWindow`；刚压缩完 tokens 为 `null` → 前端不显示）。
+- **图片（两条路，故意不对称）**：
+  - **我发的图**（输入框 → `agent.session.prompt{images}`）：前端**先压**（`pages/chat/attachments.js`：长边 ≤1280px、转 JPEG 0.8、EXIF 旋转靠 `createImageBitmap({imageOrientation:"from-image"})`；GIF 原样传；~150KB/张），服务端只**硬校验**（不做二次压缩 —— SDK 那个 photon WASM 打成 exe 后有加载不到的风险，会静默丢图）。三条入口全是浏览器原生：粘贴 `onPaste` / 拖拽 `onDrop`（挂 window，否则拖到消息流上浏览器会直接打开图）/ `<input type="file" accept="image/*">`（★ 不加 `capture`：加了只剩相机、相册入口没了；手机靠它自动弹「拍照/相册」，**不用 getUserMedia** —— 那个要 HTTPS，chamber 内网 http 用不了）。图随帧全量带（首屏/翻页/实时）—— 那是用户自己的输入，必须一眼看到。
+  - **agent 读的图**（`read` 工具）：SDK 的 `read.js` 内部先 `processImage` 压（≤2000px/4.5MB）再进 toolResult → **落盘的就是模型看到的那一份**（没有"传 LLM 一份、落盘另一份"这回事）。投影时**故意不带**（`messages.js` 的 `imagesOf` 只给 user 用），点开这条工具结果才走 `agent.chat.toolResult` 现拉。
+  - **开关**：`chat.sync.modelInput`（= `s.model.input`）—— 不支持图的模型，前端把按钮置灰、粘贴/拖拽也拦；服务端照样校验（缓存值可能过期）。
+  - **躲不掉的胖**：图进了消息就必然落盘 jsonl（消息档案 = 上下文，没有后门），压只是让它胖一个数量级小。想彻底解只有「图外置 + jsonl 存路径」—— 那会砸掉 pi TUI 打开同一档案的能力，不做。
 - **插件域（`agent-service/plugins/`）**：chamber 内置的「**按 cwd 配置启用**的能力」——每个插件往 AgentSession 里注入一个工具。抽这一层是因为 subagent 之后还会有同类的（都是"给 agent 加一个能力，能不能用由目录决定"）。加新插件 = 写 `plugins/xxx.js` + 在 `plugins/index.js` 的 `PLUGINS` 加一行。
   - **插件契约**（`plugins/xxx.js` 必须导出三个东西）：
     ```js

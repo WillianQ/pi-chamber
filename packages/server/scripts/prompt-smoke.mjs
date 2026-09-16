@@ -2,6 +2,8 @@
 // 用法: node scripts/prompt-smoke.mjs ["想说的话"]        （真写盘，用完即删幽灵）
 //
 // 断言的是"帧语义"，不是"模型说了什么"：草稿出生 → 增量入格 → 终稿整条替换 → status 归 idle。
+// 另带一段**图片往返**（模型不吃图就自动跳过）：带图 prompt → user 消息帧带 images →
+// open 重推全量 sync 时仍带（证明投影来自 jsonl）+ 超量被拒的负例。
 import { getToken } from "./lib/creds.mjs";
 import WebSocket from "ws";
 import jwt from "jsonwebtoken";
@@ -12,6 +14,9 @@ import { nodeTransport } from "@pi-chamber/bus/transport-node.js";
 const BASE = process.env.BASE || "http://localhost:3001";
 const CWD = resolve(".");
 const TEXT = process.argv[2] || "回答四个字：收到明白";
+// 1×1 红色 PNG：只求"真能当图发"，不靠它验模型看懂了什么
+const PNG_1PX =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 let pass = 0;
 let fail = 0;
 const step = (name, ok, extra = "") => {
@@ -32,7 +37,7 @@ await new Promise((res, rej) => {
 console.log(`✔ 已连接 @ ${BASE}  cwd=${CWD}\n`);
 
 // ── 帧记录 ──
-const stream = { drafts: 0, deltas: 0, deltaChars: 0, deltaKinds: new Set(), finals: [], rowStatuses: [], rowNames: [] };
+const stream = { drafts: 0, deltas: 0, deltaChars: 0, deltaKinds: new Set(), finals: [], rowStatuses: [], rowNames: [], userMsgs: [] };
 const waiters = [];
 function watch(ev, fn) {
   bus.on(ev, (p) => {
@@ -63,6 +68,7 @@ watch("agent.chat.sync", () => {}); // 只为唤醒 wait（下面各 wait 都等
 watch("agent.chat.message", (p) => {
   if (p?.open && p.m?.role === "assistant") stream.drafts++;
   else if (p?.m?.role === "assistant") stream.finals.push(p.m);
+  else if (p?.m?.role === "user") stream.userMsgs.push(p.m);
 });
 watch("agent.chat.delta", (p) => {
   stream.deltas++;
@@ -121,6 +127,40 @@ try {
   step("名册行 status 走过 running → idle",
     stream.rowStatuses.includes("running") && stream.rowStatuses.at(-1) === "idle",
     stream.rowStatuses.join(" → "));
+
+  // 3.5 图片往返（模型不吃图就跳过）
+  if (!created.modelInput?.includes("image")) {
+    console.log(`⊘ 图片往返：当前模型不吃图（modelInput=${JSON.stringify(created.modelInput ?? null)}）→ 跳过`);
+  } else {
+    const before = stream.userMsgs.length;
+    const imgIdleP = wait("agent.chat.sync", (p) => p.status === "idle", 180000, "图片轮 idle");
+    bus.emit(
+      "agent.session.prompt",
+      { sessionId, text: "这张图什么颜色？两个字回答", images: [{ type: "image", mimeType: "image/png", data: PNG_1PX }] },
+      { net: true }
+    );
+    await imgIdleP;
+    await new Promise((r) => setTimeout(r, 300));
+    const um = stream.userMsgs.slice(before).at(-1);
+    step("带图 prompt → user 消息帧带 images", !!um?.images?.length, `images=${um?.images?.length ?? 0}`);
+
+    // 首屏投影：open 幂等重推全量 sync，图应还在（来源 = jsonl，不是内存残影）
+    const fullP = wait("agent.chat.sync", (p) => p.activeId === sessionId && Array.isArray(p.messages), 30000, "open 全量");
+    bus.emit("agent.session.open", { sessionId }, { net: true });
+    const full = await fullP;
+    const withImg = full.messages.filter((m) => m.role === "user" && m.images?.length).length;
+    step("首屏 chat.sync 里 user 消息仍带图（投影自 jsonl）", withImg > 0, `带图 user 消息 ${withImg} 条`);
+
+    // 负例：超量整条拒（不落盘、不静默丢图）
+    const errP = wait("agent.chat.notice", (p) => p?.type === "error", 15000, "超量被拒");
+    bus.emit(
+      "agent.session.prompt",
+      { sessionId, text: "x", images: Array.from({ length: 6 }, () => ({ type: "image", mimeType: "image/png", data: PNG_1PX })) },
+      { net: true }
+    );
+    const err = await errP;
+    step("6 张图 → 被拒并弹 notice", /最多/.test(err.message ?? ""), `“${err.message}”`);
+  }
 
   // 4. 收尾清场（幽灵场：不落盘就直接销毁；落盘了也删掉，保持环境干净）
   const delP = wait("agent.sessions.patch", (p) => p.rows?.some((r) => r.id === sessionId && r.deleted), 15000, "delete");
