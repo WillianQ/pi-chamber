@@ -593,37 +593,36 @@ export default function InputBox() {
 
       {/* 输入行：TextArea 占满 + 图片钮贴右边（align=flex-end：输入框长高时按钮跟底对齐） */}
       <Flex gap={6} align="flex-end">
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <Input.TextArea
-            ref={taRef}
-            value={text}
-            onChange={(e) => {
-              textRef.current = e.target.value;
-              setText(e.target.value);
-              setCaret(e.target.selectionStart ?? e.target.value.length);
-              panel.onTextChange();
-            }}
-            onSelect={(e) => setCaret(e.target.selectionStart ?? 0)} // 光标动（键盘/鼠标/方向键）→ 面板跟着重算
-            onKeyDown={onKeyDown}
-            onPaste={img.onPaste}
-            onBlur={() => setTimeout(() => panel.dismiss(), 120)}
-            placeholder={
-              isCompacting
-                ? "压缩中…"
-                : status === "running"
-                  ? "回复中…Enter 插队"
-                  : "Shift+Enter 换行 · / 命令 · @ 引用文件"
-            }
-            disabled={isCompacting || pending}
-            autoSize={{ minRows: 1, maxRows: 8 }}
-          />
-        </div>
         <Button
           icon={<PictureOutlined />}
           disabled={!img.canImage || isCompacting}
           onClick={() => img.pickerRef.current?.click()}
           title={img.canImage ? `添加图片（最多 ${MAX_IMAGES} 张）` : "当前模型不支持图片"}
         />
+        <Input.TextArea
+          ref={taRef}
+          value={text}
+          onChange={(e) => {
+            textRef.current = e.target.value;
+            setText(e.target.value);
+            setCaret(e.target.selectionStart ?? e.target.value.length);
+            panel.onTextChange();
+          }}
+          onSelect={(e) => setCaret(e.target.selectionStart ?? 0)} // 光标动（键盘/鼠标/方向键）→ 面板跟着重算
+          onKeyDown={onKeyDown}
+          onPaste={img.onPaste}
+          onBlur={() => setTimeout(() => panel.dismiss(), 120)}
+          placeholder={
+            isCompacting
+              ? "压缩中…"
+              : status === "running"
+                ? "回复中…Enter 插队"
+                : "Shift+Enter 换行 · / 命令 · @ 引用文件"
+          }
+          disabled={isCompacting || pending}
+          autoSize={{ minRows: 1, maxRows: 8 }}
+        />
+
       </Flex>
 
       <ActionBar
