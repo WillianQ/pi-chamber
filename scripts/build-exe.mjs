@@ -126,7 +126,7 @@ execFileSync(process.execPath, [`--build-sea=${seaConfig}`], { cwd: ROOT, stdio:
 
 // ───────────────────────── ⑤ 图标 ─────────────────────────
 step(5, "换 exe 图标");
-applyIcon(EXE, ICON);
+await applyIcon(EXE, ICON);
 console.log(`      ${path.relative(ROOT, ICON)}`);
 
 console.log(`\n✅ 产出：${path.relative(ROOT, EXE)}  ${mb(fs.statSync(EXE).size)}`);
@@ -172,8 +172,10 @@ async function freeOldExe() {
  * 顺序不能反：必须**先合成 exe**（SEA blob 作为一条资源写进去），再换图标 ——
  * 这里只替换图标那几条资源，其余（含 type=10 的 NODE_SEA_BLOB）原样保留。
  * 图标组位置沿用 node.exe 的（id=1 / lang=1033）。
+ *
+ * ★ 写入要重试：刚合成出来的 115MB exe 常被 Defender 之类扫几秒 → EBUSY（真踩过）。
  */
-function applyIcon(exePath, icoPath) {
+async function applyIcon(exePath, icoPath) {
   const exe = NtExecutable.from(fs.readFileSync(exePath), { ignoreCert: true });
   const res = NtExecutableResource.from(exe);
   const ico = Data.IconFile.from(fs.readFileSync(icoPath));
@@ -184,5 +186,15 @@ function applyIcon(exePath, icoPath) {
     ico.icons.map((i) => i.data)
   );
   res.outputResource(exe);
-  fs.writeFileSync(exePath, Buffer.from(exe.generate()));
+  const buf = Buffer.from(exe.generate());
+  for (let i = 0; i < 20; i++) {
+    try {
+      fs.writeFileSync(exePath, buf);
+      return;
+    } catch (err) {
+      if (i === 19) throw err;
+      if (i === 0) console.log("      文件被占用（杀软在扫？），重试中…");
+      await new Promise((r) => setTimeout(r, 500));
+    }
+  }
 }
