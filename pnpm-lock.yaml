@@ -93,8 +93,8 @@ importers:
         specifier: workspace:*
         version: link:../bus
       '@willianqrunning/markdown-go':
-        specifier: ^0.1.0
-        version: 0.1.0
+        specifier: github:WillianQ/markdown-go
+        version: https://codeload.github.com/WillianQ/markdown-go/tar.gz/5ff4ac0eca73af3de02bb6660958a65b28d3c9e9
       '@xterm/addon-fit':
         specifier: ^0.11.0
         version: 0.11.0
@@ -972,8 +972,9 @@ packages:
       oxc-transform-react:
         optional: true
 
-  '@willianqrunning/markdown-go@0.1.0':
-    resolution: {integrity: sha512-FGHo7zms4dinFDBRhCn30nclfbR4HDSPN8WhoDPugohV3iRqT3xjFr2noMlwhtMcRXHPqKKjFsXyhJu8sQRlhw==, tarball: https://registry.npmjs.org/@willianqrunning/markdown-go/-/markdown-go-0.1.0.tgz}
+  '@willianqrunning/markdown-go@https://codeload.github.com/WillianQ/markdown-go/tar.gz/5ff4ac0eca73af3de02bb6660958a65b28d3c9e9':
+    resolution: {tarball: https://codeload.github.com/WillianQ/markdown-go/tar.gz/5ff4ac0eca73af3de02bb6660958a65b28d3c9e9}
+    version: 0.2.2
     engines: {node: '>=18'}
 
   '@xterm/addon-fit@0.11.0':
@@ -2881,7 +2882,7 @@ snapshots:
       '@rolldown/pluginutils': 1.0.1
       vite: 8.2.2(@types/node@26.4.1)(jiti@2.7.0)(yaml@2.9.0)
 
-  '@willianqrunning/markdown-go@0.1.0':
+  '@willianqrunning/markdown-go@https://codeload.github.com/WillianQ/markdown-go/tar.gz/5ff4ac0eca73af3de02bb6660958a65b28d3c9e9':
     dependencies:
       echarts: 5.6.0
       highlight.js: 11.12.0
