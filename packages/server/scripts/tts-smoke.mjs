@@ -3,6 +3,9 @@
 //   node scripts/tts-smoke.mjs 1           一段 speak → finish → 等 end(done)
 //   node scripts/tts-smoke.mjs 2           两段 speak（同一会话 continue）→ finish
 //   node scripts/tts-smoke.mjs 3 [秒]      两段 speak，间隔 N 秒（默认 25，> 阿里 23s 无 continue 超时）
+//                                          —— 断言：间隔期【无】tts.end（超时被静默，会话不判死），第二段照样出声
+//   node scripts/tts-smoke.mjs 4           发一段(等出声) → break 断阿里 → 再发一段
+//                                          —— 断言：断线【不】发 tts.end，下次 speak 重连重开
 //   node scripts/tts-smoke.mjs 4           发一段(等出声) → break 断阿里 → 再发一段
 // 换活体: BASE=http://localhost:3000 node scripts/tts-smoke.mjs 1
 import { getToken } from "./lib/creds.mjs";
@@ -86,18 +89,17 @@ if (SCENARIO === 1) {
   await speak(T_A);
   await waitAudio(25000);
   report(true, "第一段已出声", `(${audio.chunks} 块)`);
-  console.log(`   …等 ${GAP_MS / 1000}s 期间观察断线…`);
+  console.log(`   …等 ${GAP_MS / 1000}s 期间观察：超时应被静默（不发 end）…`);
   await sleep(GAP_MS);
-  const gapEnds = ends.length;
-  if (gapEnds) report(ends.at(-1)?.reason === "error", "空闲期断线被收束为 end(error)", `(共 ${gapEnds} 次)`);
-  else report(true, "间隔后连接仍活（阿里未按 23s 断）");
+  report(ends.length === 0, "间隔期无 tts.end（超时被静默，会话不判死）", `(end 次数 ${ends.length})`);
   const before = ends.length;
-  await speak(T_B);
   const b2 = audio.chunks;
+  await speak(T_B);
   finish();
   await waitEnd(before, 40000);
   const last = ends.at(-1);
-  report(last?.reason === "done", "第二段新会话 end(done)", `(本段音频 ${audio.chunks - b2} 块)`);
+  report(last?.reason === "done", "第二段重开 task 后 end(done)", `(本段音频 ${audio.chunks - b2} 块)`);
+  report(audio.chunks > b2, "第二段真的出声了（重开 task 生效）");
 } else if (SCENARIO === 4) {
   line("发一段(等出声) → break 断阿里 → 再发一段");
   await speak(T_A);
@@ -106,14 +108,15 @@ if (SCENARIO === 1) {
   const before = ends.length;
   await brk();
   report(true, "tts.break 已断阿里 WS");
-  await waitEnd(before, 8000);
-  report(ends.at(-1)?.reason === "error", "断线被收束为 end(error)", `(${ends.at(-1)?.error ?? ""})`);
+  await sleep(2500);
+  report(ends.length === before, "断线不发 tts.end（会话保持）", `(end 次数 ${ends.length})`);
   const b2 = audio.chunks;
   await speak(T_B);
   finish();
   await waitEnd(ends.length, 30000);
   const last = ends.at(-1);
-  report(last?.reason === "done", "第二段自动重连后 end(done)", `(本段音频 ${audio.chunks - b2} 块)`);
+  report(last?.reason === "done", "重连重开后 end(done)", `(本段音频 ${audio.chunks - b2} 块)`);
+  report(audio.chunks > b2, "第二段真的出声了（重连重开生效）");
 } else {
   console.error("未知场景:", SCENARIO);
   process.exit(1);
