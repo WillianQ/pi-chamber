@@ -2,7 +2,7 @@
 // （不接进 pnpm test —— 那条跑的是 packages/server 的用例）
 import { test } from "node:test";
 import assert from "node:assert";
-import { cutBlock, cleanForSpeech } from "./tts-text.js";
+import { cutBlock, cleanForSpeech, createFenceFilter } from "./tts-text.js";
 
 // ───────────────────────── cutBlock ─────────────────────────
 
@@ -11,8 +11,8 @@ test("cutBlock：不足 100 字全量发", () => {
   assert.deepEqual(cutBlock(""), { text: "", raw: "", rest: "" });
 });
 
-test("cutBlock：中文满 400 分后遇句号收尾", () => {
-  // 120 个中文字 = 480 分；到第 100 字（400 分）后接着扫，
+test("cutBlock：中文满 300 分后遇句号收尾", () => {
+  // 120 个中文字 = 480 分；到第 75 字（300 分）后接着扫，
   // 第 121 个字符是「。」→ 4 分 → 切点 121
   const r = cutBlock("甲".repeat(120) + "。后面还有很长很长的内容要接着往下写不能停");
   assert.equal(r.text, "甲".repeat(120) + "。");
@@ -33,19 +33,19 @@ test("cutBlock：英文句号带 lookahead —— 3.14 里的点不当句末", (
   assert.equal(r.rest.startsWith(" "), true);
 });
 
-test("cutBlock：英文按词算 —— 块远长于 100 字符（不会读 8 秒就断）", () => {
-  const rEn = cutBlock("This is a test. ".repeat(60)); // 1680 分
-  const rZh = cutBlock("这是一句测试。".repeat(40)); // 1120 分
-  assert.ok(rEn.text.length > 300, `英文块应 >300 字符，实得 ${rEn.text.length}`);
-  assert.ok(rZh.text.length < 130, `中文块应 ≈100 字，实得 ${rZh.text.length}`);
+test("cutBlock：英文按词算 —— 英文块远长于中文块（不会读 8 秒就断）", () => {
+  const rEn = cutBlock("This is a test. ".repeat(60)); // 每组 19 分（句号算 4 分）→ 切点 ≈255 字符
+  const rZh = cutBlock("这是一句测试。".repeat(40)); // 每组 28 分 → 切点 ≈77 字符
+  assert.ok(rEn.text.length > 250, `英文块应 >250 字符，实得 ${rEn.text.length}`);
+  assert.ok(rZh.text.length < 130, `中文块应 ≈75 字，实得 ${rZh.text.length}`);
   assert.equal(rEn.text.endsWith("."), true);
   assert.equal(rZh.text.endsWith("。"), true);
 });
 
-test("cutBlock：满 800 分仍无标点 → 硬切并补句号", () => {
-  const r = cutBlock("字".repeat(250)); // 1000 分；800 分落在第 200 字 → 硬切
-  assert.equal(r.text, "字".repeat(200) + "。");
-  assert.equal(r.rest, "字".repeat(50));
+test("cutBlock：满 600 分仍无标点 → 硬切并补句号", () => {
+  const r = cutBlock("字".repeat(250)); // 1000 分；600 分落在第 150 字 → 硬切
+  assert.equal(r.text, "字".repeat(150) + "。");
+  assert.equal(r.rest, "字".repeat(100));
 });
 
 test("cutBlock：内部已完成清洗（含 markdown 的块直接可念）", () => {
@@ -58,12 +58,71 @@ test("cutBlock：整块纯标记 → text 空（调用方跳过）", () => {
   assert.equal(cutBlock("```js\n```").text, "");
 });
 
+// ───────────────────── 围栏过滤（"不读代码"） ─────────────────────
+
+test("围栏：```js 整块不念，原位换成一句提示", () => {
+  const f = createFenceFilter();
+  assert.equal(f.feed("前文。\n\n```js\nconst a = 1;\n```\n\n后文。\n"), "前文。\n\n下面是 js 代码。\n\n后文。\n");
+});
+
+test("围栏：裸 ``` 内容照读，标记丢", () => {
+  const f = createFenceFilter();
+  assert.equal(f.feed("```\n裸围栏内容\n```\n"), "裸围栏内容\n");
+});
+
+test("围栏：```md 内容照读", () => {
+  const f = createFenceFilter();
+  assert.equal(f.feed("```md\n# 示例\n```\n"), "# 示例\n");
+});
+
+test("围栏：被 delta 从中间切开也认（半行缓冲）", () => {
+  const f = createFenceFilter();
+  assert.equal(f.feed("前。\n``"), "前。\n"); // 只差换行的围栏标记 → 留着等
+  assert.equal(f.feed("`js\ncode\n"), "下面是 js 代码。\n"); // 补上后识别
+  assert.equal(f.feed("```\n后。\n"), "后。\n");
+});
+
+test("围栏：忘写闭围栏 → 遇标题强行解除（保险）", () => {
+  const f = createFenceFilter();
+  // 注意：filterFences 只做"剔代码"，不清洗 —— ## 要留给 cutBlock 里的 cleanForSpeech
+  assert.equal(f.feed("```js\ncode\n## 标题\n正文\n"), "下面是 js 代码。\n## 标题\n正文\n");
+});
+
+test("围栏：reset 清状态（新任务不能带着上一轮的围栏）", () => {
+  const f = createFenceFilter();
+  f.feed("```js\ncode\n");
+  f.reset();
+  assert.equal(f.feed("正文\n"), "正文\n");
+});
+
+test("围栏：flush 吐出卡住的尾巴（不丢文本）", () => {
+  const f = createFenceFilter();
+  assert.equal(f.feed("正文\n``"), "正文\n");
+  assert.equal(f.flush(), "``");
+});
+
 // ───────────────────────── cleanForSpeech ─────────────────────────
 
 test("链接与图片", () => {
   assert.equal(cleanForSpeech("看 [文档](https://a.com/b) 吧"), "看 文档 吧");
   assert.equal(cleanForSpeech("![截图](https://a.com/x.png)结束了"), "结束了");
   assert.equal(cleanForSpeech("访问 <https://a.com> 即可"), "访问 即可");
+});
+
+test("自定义属性 [文字]{...} → 只留文字", () => {
+  assert.equal(cleanForSpeech("这是[重点]{color:red}内容"), "这是重点内容");
+});
+
+test("裸 URL 删掉，但不动句末标点", () => {
+  assert.equal(cleanForSpeech("见 https://x.com/a 和 http://y.cn。"), "见 和 。");
+});
+
+test("表格：分隔行整行删，数据行 | → 逗号", () => {
+  assert.equal(
+    cleanForSpeech("| 名称 | 端口 |\n| --- | --- |\n| 后端 | 3000 |"),
+    "名称，端口\n\n后端，3000",
+  );
+  assert.equal(cleanForSpeech("|:--|--:|\n| a | b |"), "a，b");
 });
 
 test("代码", () => {
@@ -92,9 +151,10 @@ test("分隔线删掉，列表原样保留", () => {
   assert.equal(cleanForSpeech("1. 第一\n2. 第二"), "1. 第一\n2. 第二");
 });
 
-test("HTML 标签删掉", () => {
+test("HTML 标签删掉（泛型也一起吃掉 —— 已知并接受）", () => {
   assert.equal(cleanForSpeech("<div>内容</div>"), "内容");
   assert.equal(cleanForSpeech("换行<br>标签"), "换行标签");
+  assert.equal(cleanForSpeech("返回 Promise<string>"), "返回 Promise");
 });
 
 test("空白收尾 + 空输入", () => {

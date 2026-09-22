@@ -37,10 +37,13 @@
 //     只"文本全部喂完"后才发一次 finish，flush 可能残留的无标点尾段。
 //   切块规则 + markdown 清洗 + 补尾标点，全在 lib/tts-text.js 的 cutBlock 里一步做完；
 //   这里只管“什么时候切、一块一块往外喂”。
+//
+//   围栏代码（"不读代码"）：inject 入口先过 fence.feed，```js … ``` 整块剔掉、**不进 textBuf** ——
+//   所以它既不占切块长度、也不会被送出去。规则与保险见 lib/tts-text.js 的 createFenceFilter。
 import { create } from "zustand";
 import { bus } from "../bus.js";
 import { audioPlayer } from "../lib/audio-player.js";
-import { cutBlock } from "../lib/tts-text.js";
+import { cutBlock, createFenceFilter } from "../lib/tts-text.js";
 
 const TICK_MS = 2000; // 轮询拍表间隔
 const THRESHOLD_SEC = 3; // 播放剩余 < 3s 才补喂
@@ -74,7 +77,11 @@ let stopped = true; // 无激活任务（空闲/清场后为真；首次 inject 
 let sr = 22050; // 首个 speak 回执带回
 let lastFailAt = 0;
 let inFlightAt = 0; // 在途块发起时刻（超时放行兜底）
-let injectCount = 0; // inject计数器
+let injectCount = 0; // inject计数器（★ 按**原文**累加，终稿兜底 m.text.slice(injectCount) 靠它对齐）
+
+// 围栏过滤器（"不读代码"）：代码不进 textBuf，天然不占切块长度。规则/保险见 tts-text.js。
+// ★ 新任务 / 清场 / 播完一律 fence.reset()（否则上一轮停在围栏里会把这轮正文吞掉）。
+const fence = createFenceFilter();
 
 const st = (s) => useTTSStore.setState(s);
 
@@ -100,6 +107,7 @@ function settleIfDone() {
   if (audioPlayer.hasActive() || audioPlayer.buffered() > 0.01) return; // 还在播
   stopped = true;
   mode = "manual"; // 任务播完归位：live/manual 都回安全态（下个 message_start 才可能再 start("live")）
+  fence.reset(); // 清围栏状态，别把"读到一半的围栏"带进下一次朗读
   st({ phase: "idle", activeKey: null });
 }
 
@@ -179,16 +187,19 @@ export const useTTSStore = create(() => ({
       audioPlayer.ensure(); // manual 在手势栈内；live 由 autoLive 钮开时预热过（非手势也能响）
       stopped = false;
       eof = false;
+      fence.reset(); // ★ 新任务：清围栏状态（上一轮若停在围栏里，这轮不能带着）
       st({ phase: "speaking", error: null });
     }
-    textBuf += t;
-    injectCount += t.length
+    textBuf += fence.feed(t); // ★ 围栏代码不进 textBuf
+    injectCount += t.length; // 按**原文**计数（终稿兜底要用原文位置对齐）
     tick(); // 立即拍一次（首块不用等 2s）
   },
 
   /** 声明"没有更多文本了"：缓存喂完 + 播完才回 idle。manual 由用户收尾；live 由 settled 收尾 */
   finish() {
     eof = true;
+    const t = fence.flush(); // 收尾：把卡在围栏判断里的尾巴吐出来（可能不是围栏标记，不能丢）
+    if (t) textBuf += t;
     tick();
     settleIfDone();
   },
@@ -239,6 +250,7 @@ function stopPlayback(clearText) {
   inFlight = null;
   inFlightAt = 0;
   finishSent = false;
+  fence.reset(); // 清围栏状态（下一轮从干净状态开始）
   if (clearText) textBuf = "";
   audioPlayer.stop();
   if (sessionLive) {
