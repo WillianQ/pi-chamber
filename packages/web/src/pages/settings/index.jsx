@@ -7,7 +7,7 @@
 //
 // 数据来源：setting-store（setting.sync 推来的服务端真值）。改 = emit setting.update，
 // **不做本地乐观更新** —— 等服务端 sync 回来才是真值（失败会自动回滚 + setting.notice 提示）。
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Alert, Button, Flex, Input, InputNumber, Select, Slider, Switch } from "antd";
 import { LogoutOutlined, SettingOutlined } from "@ant-design/icons";
 import { T } from "../../theme/tokens.js";
@@ -108,6 +108,15 @@ function TtsPage({ tts }) {
   const [keyDraft, setKeyDraft] = useState("");
   const dirtyKey = keyDraft.trim().length > 0;
 
+  // 语速滑块：受控组件**必须有 onChange**，否则拖动时手柄会弹回原位（rc-slider 只在内部值
+  // 与 value 对得上时才用它）。所以拖动期走本地草稿，松手才提交给服务端；
+  // 服务端真值一到（含校验失败后的回滚）就重新对齐 —— 拖动中不对齐，免得被人抢手柄。
+  const [rateDraft, setRateDraft] = useState(Number(tts.rate));
+  const draggingRef = useRef(false);
+  useEffect(() => {
+    if (!draggingRef.current) setRateDraft(Number(tts.rate));
+  }, [tts]);
+
   const saveKey = () => {
     settingActions.update({ tts: { dashscopeApiKey: keyDraft.trim() } });
     setKeyDraft("");
@@ -165,14 +174,20 @@ function TtsPage({ tts }) {
         />
       </Field>
 
-      <Field label={`语速 ${Number(tts.rate).toFixed(1)}×`} hint="0.5 – 2.0；下一条朗读生效">
+      <Field label={`语速 ${Number(rateDraft).toFixed(1)}×`} hint="0.5 – 2.0；下一条朗读生效">
         <Slider
           min={0.5}
           max={2}
           step={0.1}
-          value={Number(tts.rate)}
+          value={rateDraft}
           disabled={!tts.enabled}
+          onChange={(v) => setRateDraft(v)}
+          onBeforeChange={() => {
+            draggingRef.current = true;
+          }}
           onChangeComplete={(v) => {
+            draggingRef.current = false;
+            setRateDraft(v);
             stopIfSpeaking();
             settingActions.update({ tts: { rate: v } });
           }}
