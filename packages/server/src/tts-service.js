@@ -46,7 +46,7 @@ const MAX_FAILS = 3; // 连吃几次 task-failed 且一次声都没出 → 判�
 
 // —— 配置 ——
 // model / sampleRate 硬编码（设置项里没有它们，见 setting.js 字段表）；apiKey / voice / rate 走设置。
-const MODEL = "qwen-audio-3.0-tts-flash";
+const MODEL = "qwen-audio-3.1-tts-flash";
 const SAMPLE_RATE = 22050;
 
 // 当前会话的语音参数：run-task 一发出就定死，中途改不了 ——

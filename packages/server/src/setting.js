@@ -58,7 +58,7 @@ function defaults() {
     jwtSecret: null, // null = 待生成
     port: 3000,
     termdPort: 3002,
-    tts: { enabled: false, dashscopeApiKey: null, voice: "longanhuan_v3.6", rate: 1.0 },
+    tts: { enabled: false, dashscopeApiKey: null, voice: "longanhuan_v3.1", rate: 1.0 },
     stt: { enabled: false, dashscopeApiKey: null },
   };
 }

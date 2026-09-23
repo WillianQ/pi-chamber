@@ -19,17 +19,17 @@ import {
 } from "../../stores/index.js";
 import { SHORTCUTS, SHORTCUT_GROUPS } from "../../shortcuts.js";
 
-// 音色快捷项（qwen-audio-3.0-tts-flash 系统音色，常见中文向）；可自由输入任意音色参数
+// 音色快捷项（qwen-audio-3.1-tts-flash 系统音色，常见中文向）；可自由输入任意音色参数
+// ★ 音色与模型死绑：3.1 只认 _v3.1 后缀这组，换后端 MODEL（tts-service.js）时必须同步改这里
 const VOICE_OPTIONS = [
-  { value: "longanlingxi", label: "longanlingxi · 龙安灵希（甜美女声）" },
-  { value: "longanhuan_v3.6", label: "longanhuan_v3.6 · 龙安欢（清亮女声）" },
-  { value: "longanfengyue", label: "longanfengyue · 龙安风悦（自然亲切）" },
-  { value: "longanyuanfei", label: "longanyuanfei · 龙安元妃" },
-  { value: "longanxiaoxin", label: "longanxiaoxin · 龙安小昕（活泼）" },
-  { value: "longjielidou_v3.6", label: "longjielidou_v3.6 · 龙杰力豆（男童）" },
-  { value: "longpaopao_v3.6", label: "longpaopao_v3.6 · 龙泡泡（软糯童音）" },
-  { value: "longhuohuo_v3.6", label: "longhuohuo_v3.6 · 龙火火（少年）" },
-  { value: "longchuanshu_v3.6", label: "longchuanshu_v3.6 · 龙川叔（男声）" },
+  { value: "longanhuan_v3.1", label: "longanhuan_v3.1 · 龙安欢（清亮女声）" },
+  { value: "longanlingxi_v3.1", label: "longanlingxi_v3.1 · 龙安灵希（甜美女声）" },
+  { value: "longanlingxin_v3.1", label: "longanlingxin_v3.1 · 龙安灵心（知心温暖）" },
+  { value: "longanfengyue_v3.1", label: "longanfengyue_v3.1 · 龙安风悦（自然亲切）" },
+  { value: "longanyuanfei_v3.1", label: "longanyuanfei_v3.1 · 龙安元妃（高傲妃子音）" },
+  { value: "longjielidou_v3.1", label: "longjielidou_v3.1 · 龙杰力豆（男童）" },
+  { value: "longpaopao_v3.1", label: "longpaopao_v3.1 · 龙泡泡（软糯童音）" },
+  { value: "longhuohuo_v3.1", label: "longhuohuo_v3.1 · 龙火火（少年）" },
 ];
 
 // 三级层级（块标题 = sm 加粗白 → 行/正文 = xs 白 → 说明 = xs 更弱的灰）
@@ -367,7 +367,7 @@ const PAGES = [
 const FALLBACK = {
   port: 3000,
   termdPort: 3002,
-  tts: { enabled: false, dashscopeApiKey: null, voice: "longanhuan_v3.6", rate: 1 },
+  tts: { enabled: false, dashscopeApiKey: null, voice: "longanhuan_v3.1", rate: 1 },
   stt: { enabled: false, dashscopeApiKey: null },
 };
 
